@@ -48,6 +48,7 @@ import {
   recursiveSearchMayReachDeniedPath,
 } from "./permissions.ts";
 import {
+  describeActiveControls,
   extractInputPath,
   isInside,
   isProtectedPath,
@@ -764,6 +765,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         cfg,
         serializeClassifierAction(event.toolName, input),
         loadedContext,
+        describeActiveControls(ctx.cwd, [globalConfig.activePath]),
       );
       logClassifierIo(decision, logCtx);
       if (decision.decision === "allow") {

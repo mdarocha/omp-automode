@@ -15,7 +15,15 @@ import {
   resolve,
 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HOME, PATH_BEARING_TOOLS, PROFILE_FILES } from "./constants.ts";
+import {
+  HOME,
+  PATH_BEARING_TOOLS,
+  PI_GLOBAL_SETTINGS,
+  PI_PROJECT_LOCAL_SETTINGS,
+  PI_PROJECT_SHARED_SETTINGS,
+  PROFILE_FILES,
+} from "./constants.ts";
+import type { ActiveControls } from "./types.ts";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
@@ -231,6 +239,47 @@ export function isProtectedPath(
   return false;
 }
 
+const EXTENSION_SOURCE_DIR = dirname(fileURLToPath(import.meta.url));
+
+/** Real paths the running extension executes from. Directories cover everything below them. */
+export const LOADED_EXTENSION_PATHS: readonly string[] = [
+  resolve(EXTENSION_SOURCE_DIR, "../auto-mode.ts"),
+  EXTENSION_SOURCE_DIR,
+  resolve(EXTENSION_SOURCE_DIR, "../vendor"),
+].map((path) => resolvePathForPolicy(path) ?? path);
+
+function isUnderLoadedExtension(normalizedPath: string): boolean {
+  return LOADED_EXTENSION_PATHS.some((root) => {
+    const normalizedRoot = normalizeProtectedPathForMatch(root);
+    return normalizedPath === normalizedRoot ||
+      normalizedPath.startsWith(`${normalizedRoot}/`);
+  });
+}
+
+/** Whether a path is one of the loaded extension's files, after resolving symlinks. */
+export function isLoadedExtensionPath(path: string): boolean {
+  return isUnderLoadedExtension(
+    normalizeProtectedPathForMatch(resolvePathForPolicy(path) ?? resolve(path)),
+  );
+}
+
+/** Describe the controls that are in force for a call made from `cwd`. */
+export function describeActiveControls(
+  cwd: string,
+  globalConfigPaths: readonly string[] = PI_GLOBAL_SETTINGS,
+): ActiveControls {
+  return {
+    extensionPaths: [...LOADED_EXTENSION_PATHS],
+    globalConfigPaths: [...globalConfigPaths],
+    projectConfigPaths: [
+      ...PI_PROJECT_LOCAL_SETTINGS,
+      ...PI_PROJECT_SHARED_SETTINGS,
+    ].map((file) => resolve(cwd, file)),
+    envPolicy: Boolean(process.env.PI_AUTOMODE_SETTINGS_JSON),
+    cwd,
+  };
+}
+
 export function isSafetyControlPath(path: string, cwd: string): boolean {
   const policyPath = resolvePathForPolicy(path) ?? resolve(path);
   const policyCwd = resolvePathForPolicy(cwd) ?? resolve(cwd);
@@ -260,13 +309,12 @@ export function isSafetyControlPath(path: string, cwd: string): boolean {
     return true;
   }
   if (normalized.includes("/.pi/") && file.startsWith("automode")) return true;
-  if (
-    normalized.includes("/pi-automode/") ||
-    (isInside(policyPath, policyCwd) && file.includes("auto-mode"))
-  ) {
-    return true;
-  }
-  return false;
+  if (isUnderLoadedExtension(normalized)) return true;
+  // Install-directory name. A clone or worktree named like the extension is not one.
+  if (normalized.includes("/extensions/pi-automode/")) return true;
+  // Legacy config names (`auto-mode.json`, `auto-mode.local.json`), not source files.
+  return isInside(policyPath, policyCwd) &&
+    /^auto-mode(?:\..+)?\.json$/.test(file);
 }
 
 export function shellPathTokenToPath(
