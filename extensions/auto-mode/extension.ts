@@ -13,6 +13,12 @@ import {
   defaultClassifyAction,
   serializeClassifierAction,
 } from "./classifier.ts";
+import {
+  agentIdentity,
+  createHubEntry,
+  globalHubRegistry,
+  type HubEntry,
+} from "./agent-hub.ts";
 import { analyzeBash, type BashAnalysis } from "./bash.ts";
 import {
   AUTO_MODE_GUIDANCE,
@@ -232,6 +238,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     let state: AutoModeState = initialState();
     let enabledOverride: EnabledOverride = {};
     let loadedContext = "";
+    let hubEntry: HubEntry | undefined;
     let globalConfigNoticeShown = false;
 
     function effectiveConfig(): EffectiveConfig {
@@ -339,6 +346,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       pushDenial(state, denial);
       persist();
       updateUi(ctx);
+      hubEntry?.decided("block", denial.toolName, denial.action);
       if (logCtx.logger.enabled) {
         logCtx.logger.append({
           type: "decision",
@@ -379,6 +387,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       state.lastReason = reason;
       persist();
       updateUi(ctx);
+      hubEntry?.decided("allow", toolName, summary);
       if (logCtx.logger.enabled) {
         logCtx.logger.append({
           type: "decision",
@@ -420,9 +429,18 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         globalConfigNoticeShown = true;
       }
       updateUi(ctx);
+      hubEntry?.dispose();
+      hubEntry = undefined;
+      const agent = agentIdentity(ctx);
+      const registry = agent ? globalHubRegistry(pi) : undefined;
+      if (agent && registry) {
+        hubEntry = createHubEntry(registry, agent);
+      }
     });
 
     pi.on("session_shutdown", (_event, ctx) => {
+      hubEntry?.dispose();
+      hubEntry = undefined;
       releaseEnabledOverride(ctx, enabledOverride);
     });
 
@@ -759,12 +777,18 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         );
       }
 
-      const decision = await classify(
-        ctx,
-        cfg,
-        serializeClassifierAction(event.toolName, input),
-        loadedContext,
-      );
+      hubEntry?.classifyStarted(event.toolName, summary);
+      let decision: ClassifyResult;
+      try {
+        decision = await classify(
+          ctx,
+          cfg,
+          serializeClassifierAction(event.toolName, input),
+          loadedContext,
+        );
+      } finally {
+        hubEntry?.classifyFinished();
+      }
       logClassifierIo(decision, logCtx);
       if (decision.decision === "allow") {
         state.classifierAllowed += 1;

@@ -6,6 +6,7 @@
  * Only read-only built-in tools bypass classification; every side-effecting action goes through the classifier.
  */
 
+export * from "./auto-mode/agent-hub.ts";
 export * from "./auto-mode/classifier.ts";
 export * from "./auto-mode/bash.ts";
 export * from "./auto-mode/config.ts";

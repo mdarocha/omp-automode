@@ -121,6 +121,10 @@ AM ● a:12 d:2 ca:5 cd:1
 - `d:` — actions denied so far, for any reason (permission rule, deterministic hard-deny, or classifier).
 - `ca:` / `cd:` — classifier decisions split into allowed and denied. These segments appear after the first classifier call. `d:` counts all denials, so `d:` is always `>= cd:`.
 
+## Agent Hub (OMP)
+
+On OMP, each session adds a read-only entry named `<agent>-automode` to the Agent Hub (`/hub`, then `1` for the agent roster): `main-automode` for the main agent and `<spawn id>-automode` for each subagent. While a classifier call is pending the entry shows `running` and the action being checked. Afterwards it shows `parked` with the latest allow or block decision. The entry is an advisor, so OMP does not list it as a peer or count it in the running-subagent badge, and revive and kill are disabled for it. It is removed when the session shuts down.
+
 ## Docs
 
 - [Configuration](docs/configuration.md)
