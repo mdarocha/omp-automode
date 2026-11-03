@@ -76,6 +76,9 @@ export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 20_000;
 /** Largest timeout that Node can represent without reducing it to 1 ms. */
 export const MAX_CLASSIFIER_TIMEOUT_MS = 2_147_483_647;
 
+/** Classifier selector OMP uses when `classifierModel` is unset: the `smol` role and its fallbacks. */
+export const DEFAULT_OMP_CLASSIFIER_SELECTOR = "@smol";
+
 /** Built-in trusted environment. Users extend this with `$defaults`. */
 export const DEFAULT_ENVIRONMENT = [
   "Trusted repo: the repository pi started in and its configured git remotes.",

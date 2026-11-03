@@ -43,6 +43,20 @@ This file is project-local. The host must trust the project before pi-automode r
 
 Set a global default classifier model in the global config file. For a trusted project, override it in the project-local config file.
 
+### Classifier model selectors
+
+`classifierModel` accepts three forms:
+
+- `provider/model-id` selects one model from the Pi/OMP registry.
+- `typesafe/jev-*` selects the native [TypeSafe Jev](#typesafe-jev) backend.
+- `@role` (OMP only) selects an OMP model role such as `@smol` or `@judge`.
+
+A role selector expands to the role's complete OMP chain: the model assigned to the role in OMP settings, then its configured or built-in fallbacks, which can sit on other providers. The classifier uses the first model in the chain that has working credentials. The `@judge` chain also holds native judgment and on-device models. They cannot run the classifier's decision tool, so the classifier skips them.
+
+Under OMP, an unset `classifierModel` means `@smol`. If that role resolves to no available model, the current session model is used. Pi has no model roles, so an unset value still means the session model, and a role selector fails closed with a reason that names the missing OMP support.
+
+If a role or model cannot be resolved, or no model in the chain has credentials, the action is blocked. An explicit selector never falls back to the session model. `/automode status`, `/automode config`, and `automode_inspect` show the selector and the concrete model it resolves to, for example `@smol → anthropic/claude-haiku-5-5 +16 fallbacks`.
+
 For Pi/OMP chat models, `classifierReasoningLevel` requests `low`, `medium`, `high`, `xhigh`, or `max` reasoning for both classifier stages. If the key is absent, pi-automode sends no reasoning preference. The server then selects the level.
 
 Pi AI clamps an unsupported value to the nearest level that the selected model supports. A model without reasoning support resolves to `off`. `low` matches the reasoning effort of Codex Auto Review.
@@ -224,7 +238,7 @@ Set `TYPESAFE_API_KEY` in the process environment before starting OMP or Pi. Do 
 
 `typesafe/jev-latest`, `typesafe/jev-preview`, and pinned IDs such as `typesafe/jev-1.14.0` use the native TypeSafe backend. No `models.json` entry or `/login` provider is required. `/automode model typesafe/jev-latest` saves the selection globally and requires the environment key. When the key is present, the picker includes `jev-latest` and the currently configured Jev version.
 
-Any other `provider/model-id` uses the existing Pi/OMP registry and provider credentials. Omitting `classifierModel` keeps the current session model as the default. Setting a TypeSafe key alone does not switch backends.
+Any other `provider/model-id` uses the existing Pi/OMP registry and provider credentials. Omitting `classifierModel` uses `@smol` under OMP and the current session model under Pi. Setting a TypeSafe key alone does not switch backends.
 
 Jev evaluates four typed questions in one request: hard-deny match, soft-deny match, coverage by ALLOW exceptions, and direct user authorization for all remaining soft-denied effects. Hard denies always block. A soft deny blocks unless every affected operation is covered by an exception or direct user authorization. Actions without a deny match are allowed.
 

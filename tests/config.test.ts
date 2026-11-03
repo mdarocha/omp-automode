@@ -787,7 +787,7 @@ test("invalid classifier models produce diagnostics and preserve valid precedenc
       autoMode: { classifierModel },
     } as any, "test-config");
     assert.deepEqual(diagnostics, [
-      "test-config: autoMode.classifierModel must be a provider/model string",
+      "test-config: autoMode.classifierModel must be a provider/model string or an @role selector",
     ]);
 
     const config = buildEffectiveConfigFromSources({

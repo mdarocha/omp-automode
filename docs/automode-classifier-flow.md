@@ -403,10 +403,11 @@ This list is evidence for the classifier only. Permission rules, hard-deny check
 
 Pi-automode selects the classifier model in this order:
 
-1. `autoMode.classifierModel` from configuration
-2. the current Pi session model.
+1. `autoMode.classifierModel` from configuration. A `provider/model-id` value resolves through the model registry. An `@role` value (OMP only) resolves to that role's chain of models in attempt order, skipping models that are not chat-capable. The classifier uses the first model in the chain that has credentials.
+2. Under OMP, the `@smol` role chain. If it resolves to nothing, the current session model.
+3. Under Pi, the current session model.
 
-`/automode model provider/model-id` and the interactive model picker save `autoMode.classifierModel` to `~/.pi/agent/extensions/pi-automode/config.json`. Project-local `.pi/automode.local.json` can still override that global choice.
+`/automode model provider/model-id`, `/automode model @role`, and the interactive model picker save `autoMode.classifierModel` to `~/.pi/agent/extensions/pi-automode/config.json`. Project-local `.pi/automode.local.json` can still override that global choice.
 
 `typesafe/jev-*` selects the native TypeSafe API and reads `TYPESAFE_API_KEY` from the environment instead of consulting the Pi registry. One request evaluates four yes/no Choice questions. Local code gives hard-deny matches unconditional precedence, then permits soft-denied effects only when ALLOW exceptions or retained direct user authorization cover all of them. Missing or invalid answers block the action.
 
