@@ -978,10 +978,5 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         "Control pi-automode: status, on, off, reload, reset, defaults, config, denials, model",
       handler: handleAutomodeCommand,
     });
-
-    pi.registerCommand("auto-mode", {
-      description: "Alias for /automode",
-      handler: handleAutomodeCommand,
-    });
   };
 }
