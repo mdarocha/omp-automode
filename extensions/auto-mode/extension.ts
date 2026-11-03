@@ -79,6 +79,14 @@ import {
   resolveToolInputPath,
 } from "./paths.ts";
 import {
+  claimsForToolCall,
+  confirmCreations,
+  MAX_PENDING_CREATIONS,
+  type PendingCreation,
+  recordCreatedPaths,
+  snapshotCreations,
+} from "./provenance.ts";
+import {
   actionSummary,
   agentIdentity,
   bindEnabledOverride,
@@ -361,6 +369,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       configDiagnostics = loadResult.diagnostics;
       const restored = restoreState(ctx);
       state = restored.state;
+      pendingCreations.clear();
       enabledOverride = bindEnabledOverride(ctx, restored.enabledOverride);
       // Register on both start paths: a `/tan` clone's subagents also look
       // their ancestors up in this registry.
@@ -382,6 +391,8 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         initialiseSession(ctx, "first-use");
       }
     }
+    // Creating calls that were allowed and are still running, by tool call id.
+    const pendingCreations = new Map<string, PendingCreation>();
 
     function effectiveConfig(): EffectiveConfig {
       return {
@@ -635,6 +646,21 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       if (answers.length > 0) {
         pi.appendEntry(ASK_ANSWER_ENTRY, { toolCallId: event.toolCallId, answers });
       }
+      return undefined;
+    });
+
+    pi.on("tool_result", (event) => {
+      const pending = pendingCreations.get(event.toolCallId);
+      if (!pending) return undefined;
+      pendingCreations.delete(event.toolCallId);
+      if (event.isError === true) return undefined;
+      const output = event.content
+        .flatMap((part) => part.type === "text" ? [part.text] : [])
+        .join("\n");
+      const created = confirmCreations(pending, output);
+      if (created.length === 0) return undefined;
+      state.createdPaths = recordCreatedPaths(state.createdPaths, created);
+      persist();
       return undefined;
     });
 
@@ -1015,6 +1041,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
           serializeClassifierAction(event.toolName, input),
           loadedContext,
           classifierNotes,
+          state.createdPaths,
         );
       } finally {
         classifierCallsInFlight -= 1;
@@ -1042,6 +1069,33 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         action: summary,
         kind: "classifier",
       }, logCtx);
+    });
+
+    // Registered right after the enforcement handler above. Pi and OMP stop at
+    // the first handler that blocks, so a call that reaches this one was
+    // allowed. The paths are only recorded as created once the call's result
+    // arrives without an error.
+    pi.on("tool_call", (event, ctx) => {
+      if (!event.toolCallId || !effectiveConfig().enabled) return undefined;
+      try {
+        const claims = claimsForToolCall(
+          event.toolName,
+          event.input as Record<string, unknown>,
+          ctx.cwd,
+          options.analyzeBash ?? analyzeBash,
+        );
+        const pending = claims && snapshotCreations(claims, Date.now());
+        if (!pending) return undefined;
+        if (pendingCreations.size >= MAX_PENDING_CREATIONS) {
+          const [oldest] = pendingCreations.keys();
+          if (oldest !== undefined) pendingCreations.delete(oldest);
+        }
+        pendingCreations.set(event.toolCallId, pending);
+      } catch {
+        // Provenance only gives the classifier more to work with. A failure
+        // here leaves the paths untracked, which keeps it as strict as before.
+      }
+      return undefined;
     });
 
     pi.registerTool({

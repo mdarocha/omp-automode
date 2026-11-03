@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CLASSIFIER_ERROR_HISTORY_LIMIT, DENIAL_HISTORY_LIMIT } from "./constants.ts";
+import { restoreCreatedPaths } from "./provenance.ts";
 import type {
   AgentIdentity,
   AutoModeState,
@@ -10,7 +11,7 @@ import type {
 } from "./types.ts";
 import { safeJson, truncateMiddle } from "./utils.ts";
 
-/** Session entry holding counters, recent denials, and the `/automode on|off` choice. */
+/** Session entry holding counters, recent denials, created paths, and the `/automode on|off` choice. */
 export const STATE_ENTRY = "pi-automode-state";
 
 /**
@@ -224,6 +225,7 @@ export function initialState(): AutoModeState {
     classifierDenied: 0,
     recentDenials: [],
     recentClassifierErrors: [],
+    createdPaths: [],
   };
 }
 
@@ -260,6 +262,7 @@ export function restoreState(ctx: ExtensionContext): {
         recentClassifierErrors: Array.isArray(entry.data.recentClassifierErrors)
           ? entry.data.recentClassifierErrors.slice(-CLASSIFIER_ERROR_HISTORY_LIMIT)
           : [],
+        createdPaths: restoreCreatedPaths(entry.data.createdPaths),
       },
       enabledOverride: entry.data.enabledOverride,
     };

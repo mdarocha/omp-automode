@@ -21,6 +21,7 @@ For each Pi `tool_call` event, the extension does this:
 13. For a configured `typesafe/jev-*` classifier, evaluate typed policy questions in one native request.
 14. Otherwise, run the one-token conservative filter, followed by structured review when requested.
 15. Persist state and update the UI status and denial history.
+16. After an allowed `bash` or `write` call returns without an error, record the paths it created (see [Paths created by this session](#paths-created-by-this-session)).
 
 The default posture is fail-closed. If model resolution, authentication, a classifier call, or response parsing fails, pi-automode blocks the action.
 
@@ -318,6 +319,8 @@ When `headlessAsk` is `classifier` and a `permissions.ask` rule matched in a ses
 
 Without notes, the block is absent.
 
+When the session has created paths (see below), a `<session-created-paths>` block follows the transcript, ahead of any `<extension-notes>` block. The block is absent otherwise.
+
 The next user message contains the complete current action as JSON. It is
 separate from the transcript. Pi-automode does not truncate it:
 
@@ -362,6 +365,39 @@ User evidence, tool-call evidence, and result evidence have separate budgets. Ea
 The first user message (the brief), the newest verified `ask` answers (up to 8), and the latest message are pinned: no budget drops them. Each is capped at half of the token budget, and pinned entries count toward the budgets first. The selector fills the remaining budget from the newest eligible entries. It renders retained evidence in chronological order. It also marks omitted or truncated evidence.
 
 Transcript truncation does not change the dedicated current-action message.
+
+### Paths created by this session
+
+The classifier sees only the most recent tool calls. A call that created a directory early in a long session can age out of the transcript before the agent cleans it up. The classifier would then treat the cleanup as deleting files that existed before the session started.
+
+Pi-automode therefore records the paths that the session's own allowed calls created, and lists them to the classifier.
+
+Tracked creators:
+
+- `mkdir` (`-p` and several operands are supported)
+- `mktemp`, when the call prints exactly one fresh path that matches the template
+- `git clone [dir]` and `gh repo clone <repo> [dir]`, including the default directory name
+- `git worktree add [-b branch] <path> [commit-ish]`
+- the `write` tool, when it creates a new file
+
+Rules for recording a path:
+
+- The call must pass every check and run. A blocked call records nothing.
+- The path must not exist when the call starts. A pre-existing directory, or a file that `write` overwrites, is never recorded.
+- The path must exist when the result arrives, and the result must not be an error. A failed call records nothing, even if it created part of the path first.
+- Calls that create missing parents (`mkdir -p`, `git clone`, `git worktree add`, `write`) record the topmost directory they created. Deleting that directory is the cleanup.
+- Relative paths resolve against the working directory. Pi-automode follows `cd` only in a plain sequence or a `&&` chain. A path that depends on a variable, command substitution, glob, brace expansion, or a `cd` that it cannot follow is not recorded. It is never guessed.
+- A path inside an already tracked path only refreshes that entry.
+
+Pi-automode keeps the last 100 paths in the `pi-automode-state` entry (`createdPaths`, newest last). The list survives reloads and `/resume`. State entries from earlier versions have no such field and restore as an empty list. Tracking is off while auto mode is off.
+
+The classifier receives at most the 30 newest paths. The block states what the list means:
+
+- An action that only deletes, moves, overwrites, or modifies a listed path, or something beneath it, is the agent cleaning up its own artifact. It does not count as deleting files that existed before session start.
+- A path that only shares a prefix with an entry, or a parent of an entry, is not covered.
+- The list does not override hard-deny rules, denied or protected paths, or any other deny rule such as exfiltration or credential handling.
+
+This list is evidence for the classifier only. Permission rules, hard-deny checks, `deniedPaths`, and protected-path handling run before the classifier and ignore it. Paths that contain control characters or angle brackets are never recorded or listed.
 
 ## Classifier model resolution
 
@@ -462,7 +498,7 @@ Blocked actions also increment `blockedActions` and add a denial record. Each de
 - action summary
 - denial kind
 
-Recent denial history has a limit of 12 entries. Pi-automode persists state with `pi.appendEntry("pi-automode-state", state)`. Thus, state survives reloads and session restoration.
+Recent denial history has a limit of 12 entries. Created paths are kept as a list of at most 100 entries. Pi-automode persists state with `pi.appendEntry("pi-automode-state", state)`. Thus, state survives reloads and session restoration.
 
 When UI is available, the extension updates the footer status and shows a warning notification for blocked actions.
 

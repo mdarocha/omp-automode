@@ -18,6 +18,7 @@ import {
 } from "./constants.ts";
 import { formatModelSpec, jevModelId, parseModelSpec } from "./model.ts";
 import { classifyWithJev } from "./jev.ts";
+import { formatSessionCreatedPaths } from "./provenance.ts";
 import { buildClassifierTranscript } from "./transcript.ts";
 import { classifyProviderError } from "./classifier-errors.ts";
 import type {
@@ -889,6 +890,7 @@ export const defaultClassifyAction: ClassifyAction = async (
   action,
   loadedContext,
   notes = [],
+  sessionCreatedPaths = [],
 ): Promise<ClassifyResult> => {
   const systemPrompt = buildClassifierPrompt(config);
   const transcript = buildClassifierTranscript(ctx, {
@@ -900,11 +902,12 @@ export const defaultClassifyAction: ClassifyAction = async (
     maxToolResultTokens: config.maxToolResultTranscriptTokens,
     maxToolResults: config.maxToolResultTranscriptEntries,
   });
+  const createdPaths = formatSessionCreatedPaths(sessionCreatedPaths);
   const contextText = `<loaded-project-instructions>\n${
     loadedContext || "(none)"
   }\n</loaded-project-instructions>\n\n<classifier-transcript>\n${
     transcript || "(none)"
-  }\n</classifier-transcript>${buildExtensionNotes(notes)}`;
+  }\n</classifier-transcript>${createdPaths && `\n\n${createdPaths}`}${buildExtensionNotes(notes)}`;
   if (jevModelId(config.classifierModel)) {
     return classifyWithJev(config, action, contextText, systemPrompt, ctx.signal);
   }

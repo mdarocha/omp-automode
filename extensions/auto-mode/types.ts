@@ -147,6 +147,8 @@ export type AutoModeState = {
   /** Kind of the last decision. Unlike `lastReason`, it is safe to show the model. */
   lastDecisionKind?: DecisionKind;
   recentClassifierErrors: ClassifierErrorRecord[];
+  /** Absolute paths this session's allowed, successful calls created, newest last. */
+  createdPaths: string[];
 };
 
 export type DenialRecord = {
@@ -303,4 +305,6 @@ export type ClassifyAction = (
   loadedContext: string,
   /** Trusted notes from the extension, shown to the classifier next to the transcript. */
   notes?: readonly string[],
+  /** Paths the session created earlier; shown to the classifier as provenance evidence. */
+  sessionCreatedPaths?: readonly string[],
 ) => Promise<ClassifyResult>;

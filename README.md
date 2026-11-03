@@ -182,6 +182,8 @@ Pi AI requests schema-constrained sampling with `strict: "prefer"`. Supported pr
 
 Both stages receive the complete current tool input in a dedicated message. Transcript truncation cannot remove action content. If the exact input cannot fit in the classifier context, auto mode blocks the call.
 
+Auto mode records paths that the session's own allowed `mkdir`, `mktemp`, `git clone`, `gh repo clone`, `git worktree add`, and new-file `write` calls created, and lists the 30 newest to the classifier. Cleaning up such a path no longer counts as deleting files that existed before the session, even when the creating call has left the transcript window. A path is recorded only after the call returned without an error and only if it did not exist beforehand. The list does not override permission rules, hard-deny checks, `deniedPaths`, or protected paths. See [Auto-mode classifier flow](docs/automode-classifier-flow.md#paths-created-by-this-session).
+
 Both stages use a classifier-specific session key. They request short cache retention from providers that support it. A missing model, provider failure, or invalid response blocks the action.
 
 With `typesafe/jev-*`, a single native Jev request evaluates hard-deny matches, soft-deny matches, allow exceptions, and remaining direct user authorization. Jev receives the same policy, retained evidence, and complete current action. The extension validates its typed answers before deciding; it does not ask Jev for generated text or tool calls.
@@ -219,6 +221,7 @@ The tests cover these safety-sensitive areas:
 - classifier routing for `write` and `edit`
 - symlink-aware safety-control checks
 - token-budgeted transcript selection
+- session-created path tracking
 - staged classifier tool-call parsing and cache behavior
 - hook-level allow and block behavior
 
