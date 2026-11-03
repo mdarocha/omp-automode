@@ -69,6 +69,7 @@ import {
   statusLine,
   statusText,
 } from "./state.ts";
+import { gateUrlSchemePath } from "./url-schemes.ts";
 import {
   ASK_ANSWER_ENTRY,
   askAnswersFromDetails,
@@ -247,6 +248,12 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       if (!tool) return false;
       const sourcePath = canonicalPath(tool.sourceInfo.path);
       return sourcePath === EXTENSION_PATH || sourcePath === EXTENSION_ENTRY_PATH;
+    }
+
+    /** Whether the named tool is OMP's built-in, not an extension tool of the same name. */
+    function ownsBuiltinTool(name: string): boolean {
+      return pi.getAllTools().find((tool) => tool.name === name)
+        ?.sourceInfo.path === `<builtin:${name}>`;
     }
 
     function persist(): void {
@@ -632,11 +639,41 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         !askRequiresClassifier &&
         !cfg.classifyReadOnlyTools &&
         READ_ONLY_TOOLS.has(event.toolName);
+
+      // `scheme://` entries are not filesystem paths. Judge them before any
+      // path resolution so `xd://propose` is not read as `<cwd>/xd:/propose`.
+      const urlGate = PATH_BEARING_TOOLS.has(event.toolName) &&
+          typeof input.path === "string"
+        ? gateUrlSchemePath(event.toolName, input.path, {
+          deviceDispatch: ownsBuiltinTool("write"),
+        })
+        : undefined;
+      if (urlGate) {
+        const deniedUrl = urlGate.decisions.find(({ entry }) =>
+          matchesDeniedPath(entry, cfg.deniedPaths)
+        );
+        if (deniedUrl) {
+          return block(ctx, {
+            timestamp: Date.now(),
+            toolName: event.toolName,
+            reason: `Path denied by policy: ${deniedUrl.entry}`,
+            action: summary,
+            kind: "deterministic-path-deny",
+          }, logCtx);
+        }
+        if (urlGate.decisions.some(({ action }) => action === "classify")) {
+          readOnlyFastPath = false;
+        }
+      }
       if (
         (cfg.deniedPaths.length > 0 || cfg.allowInsideWorkingDirectory) &&
         PATH_BEARING_TOOLS.has(event.toolName)
       ) {
-        const inputPath = extractInputPath(event.toolName, input);
+        const inputPath = urlGate
+          ? urlGate.pathEntries.length > 0
+            ? urlGate.pathEntries.join(";")
+            : undefined
+          : extractInputPath(event.toolName, input);
         if (inputPath !== undefined) {
           // omp's read and grep address more than the literal string
           // (selectors, queries, path lists), so every path the call can
@@ -718,6 +755,28 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
             // ask rules must not use the read-only fast path.
             readOnlyFastPath = false;
           }
+        }
+      }
+
+      // A built-in OMP scheme, or a nested xd:// device call, is not a path in
+      // the working directory. Entries that need review already cleared the
+      // read-only fast path above.
+      if (urlGate && !askRequiresClassifier && urlGate.pathEntries.length === 0) {
+        const reasons = urlGate.decisions.flatMap((decision) =>
+          decision.action === "classify" ||
+            (decision.action === "scratch" && !cfg.allowInsideWorkingDirectory)
+            ? []
+            : [decision.reason]
+        );
+        if (reasons.length === urlGate.decisions.length) {
+          return allow(
+            ctx,
+            "url-scheme",
+            reasons.join("; "),
+            event.toolName,
+            summary,
+            logCtx,
+          );
         }
       }
 
