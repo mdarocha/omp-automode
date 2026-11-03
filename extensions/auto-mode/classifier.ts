@@ -864,6 +864,9 @@ export const defaultClassifyAction: ClassifyAction = async (
     includeToolResults: config.includeToolResults,
     maxToolResultTokens: config.maxToolResultTranscriptTokens,
     maxToolResults: config.maxToolResultTranscriptEntries,
+    includeParentUserMessages: config.includeParentUserMessages,
+    maxParentUserTokens: config.maxParentUserTranscriptTokens,
+    maxParentUserMessages: config.maxParentUserTranscriptMessages,
   });
   const contextText = `<loaded-project-instructions>\n${
     loadedContext || "(none)"

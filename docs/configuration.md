@@ -81,6 +81,9 @@ Example:
     "includeToolResults": true,
     "maxToolResultTranscriptTokens": 2000,
     "maxToolResultTranscriptEntries": 10,
+    "includeParentUserMessages": true,
+    "maxParentUserTranscriptTokens": 2000,
+    "maxParentUserTranscriptMessages": 6,
     "environment": [
       "$defaults",
       "Source control: github.example.com/acme-corp and all repos under it",
@@ -111,6 +114,8 @@ Example:
 The first user message (the brief), up to eight recent verified `ask` answers, and the latest message are pinned: the count and token budgets never drop them.
 
 `includeToolResults` (default `true`) sends bounded, untrusted excerpts of recent tool results to the classifier. See [What is sent to the classifier](automode-classifier-flow.md#tool-result-excerpts). Set it to `false` when tool output must not reach the classifier provider. Results of `read`, `grep`, `find`, and `ls` are never sent. Shared project configuration cannot set any of these keys.
+
+Under an OMP subagent, `includeParentUserMessages` (default `true`) adds the main session's user messages to the classifier context as a separate `User (main session):` block. `maxParentUserTranscriptTokens` (default 2000, at least 32) and `maxParentUserTranscriptMessages` (default 6, at least 1) bound it. The first message and the newest verified `ask` answers of the main session stay in the block. See [Main-session user messages in subagents](automode-classifier-flow.md#main-session-user-messages-in-subagents). These messages go to the configured classifier provider like the rest of the transcript.
 
 Pi-automode does not support the former `maxTranscriptLines` field. Evidence selection now uses token and message-count budgets instead of line counts.
 

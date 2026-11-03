@@ -2,7 +2,7 @@ const PARENT_IRC_SENDER = "parent";
 const IRC_INCOMING_ENTRY = "irc:incoming";
 const ASYNC_RESULT_ENTRY = "async-result";
 const MAX_SENDER_CHARS = 64;
-const AGENT_ATTRIBUTION = "agent";
+export const AGENT_ATTRIBUTION = "agent";
 
 // The harness renders a parent's steering message as an optional `[…]` banner
 // line followed by this envelope. The envelope body is escaped, so the first

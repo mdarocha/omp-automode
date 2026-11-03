@@ -16,6 +16,7 @@ export * from "./auto-mode/hard-deny.ts";
 export * from "./auto-mode/log.ts";
 export * from "./auto-mode/model.ts";
 export * from "./auto-mode/model-selector.ts";
+export * from "./auto-mode/parent-session.ts";
 export * from "./auto-mode/paths.ts";
 export * from "./auto-mode/permissions.ts";
 export * from "./auto-mode/state.ts";

@@ -48,6 +48,10 @@ import {
   recursiveSearchMayReachDeniedPath,
 } from "./permissions.ts";
 import {
+  registerParentContextSource,
+  releaseParentContextSource,
+} from "./parent-session.ts";
+import {
   extractInputPath,
   isInside,
   isProtectedPath,
@@ -408,6 +412,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       const restored = restoreState(ctx);
       state = restored.state;
       enabledOverride = bindEnabledOverride(ctx, restored.enabledOverride);
+      registerParentContextSource(ctx);
       if (
         ctx.hasUI &&
         globalConfig.notification &&
@@ -424,6 +429,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
 
     pi.on("session_shutdown", (_event, ctx) => {
       releaseEnabledOverride(ctx, enabledOverride);
+      releaseParentContextSource(ctx);
     });
 
     pi.on("before_agent_start", (event) => {
@@ -450,6 +456,9 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     });
 
     pi.on("tool_call", async (event, ctx) => {
+      // A session that never gets `session_start` (a `/tan` clone) is still
+      // findable by its own subagents once it makes a tool call.
+      registerParentContextSource(ctx);
       // Enforcement order:
       // 1. permission deny/ask rules,
       // 2. deterministic hard-deny checks that never consult the model,
