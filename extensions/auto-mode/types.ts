@@ -36,6 +36,13 @@ export type LogConfig = {
   classifierIo: boolean;
 };
 
+/**
+ * Where a `permissions.ask` match goes in a session that has no UI of its own:
+ * `parent` asks the nearest ancestor session that has one, `classifier` skips
+ * the question and sends the call to the classifier, `block` blocks it.
+ */
+export type HeadlessAskMode = "parent" | "classifier" | "block";
+
 export type AutoModeSettings = {
   enabled?: boolean;
   classifierModel?: string;
@@ -48,6 +55,8 @@ export type AutoModeSettings = {
   classifierTimeoutMs?: number;
   /** When true, file tools whose resolved path is inside the working directory are allowed deterministically (no classifier), and outside-CWD file access is classified. */
   allowInsideWorkingDirectory?: boolean;
+  /** What a `permissions.ask` match does in a session without UI (default `parent`). */
+  headlessAsk?: HeadlessAskMode;
   /** Path glob patterns (file tools) that are always denied before the classifier. Supports `~` and `*` (matches any characters, including `/`). */
   deniedPaths?: unknown;
   maxUserTranscriptTokens?: number;
@@ -95,6 +104,7 @@ export type EffectiveConfig = {
   fastClassifierMaxTokens: number;
   classifierTimeoutMs: number;
   allowInsideWorkingDirectory: boolean;
+  headlessAsk: HeadlessAskMode;
   deniedPaths: string[];
   maxUserTranscriptTokens: number;
   maxToolTranscriptTokens: number;
@@ -205,4 +215,6 @@ export type ClassifyAction = (
   config: EffectiveConfig,
   action: string,
   loadedContext: string,
+  /** Trusted notes from the extension, shown to the classifier next to the transcript. */
+  notes?: readonly string[],
 ) => Promise<ClassifyResult>;
