@@ -65,7 +65,9 @@ import {
   releaseEnabledOverride,
   restoreState,
   STATE_ENTRY,
+  statusIcon,
   statusLine,
+  type StatusTheme,
   statusText,
 } from "./state.ts";
 import {
@@ -232,6 +234,8 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     let state: AutoModeState = initialState();
     let enabledOverride: EnabledOverride = {};
     let loadedContext = "";
+    /** Classifier calls awaiting a model response; parallel tool calls can overlap. */
+    let classifierCallsInFlight = 0;
     let globalConfigNoticeShown = false;
 
     function effectiveConfig(): EffectiveConfig {
@@ -258,7 +262,12 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     function updateUi(ctx: ExtensionContext): void {
       if (!ctx.hasUI) return;
       const cfg = effectiveConfig();
-      const text = statusLine(cfg, state);
+      const text = statusLine(
+        cfg,
+        state,
+        statusIcon(ctx.ui.theme as StatusTheme | undefined),
+        classifierCallsInFlight > 0,
+      );
       ctx.ui.setStatus(
         "pi-automode",
         cfg.enabled
@@ -759,12 +768,20 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         );
       }
 
-      const decision = await classify(
-        ctx,
-        cfg,
-        serializeClassifierAction(event.toolName, input),
-        loadedContext,
-      );
+      classifierCallsInFlight += 1;
+      updateUi(ctx);
+      let decision: ClassifyResult;
+      try {
+        decision = await classify(
+          ctx,
+          cfg,
+          serializeClassifierAction(event.toolName, input),
+          loadedContext,
+        );
+      } finally {
+        classifierCallsInFlight -= 1;
+        updateUi(ctx);
+      }
       logClassifierIo(decision, logCtx);
       if (decision.decision === "allow") {
         state.classifierAllowed += 1;

@@ -110,16 +110,31 @@ The bundled `automode-diagnostics` skill uses this tool to diagnose unexpected d
 
 ## Status line
 
-When the Pi TUI is available, the extension renders a persistent status line:
+When the TUI is available, the extension sets one compact status segment:
 
-```text
-AM ● a:12 d:2 ca:5 cd:1
+| Text | Meaning |
+|---|---|
+| `<icon> auto` | Auto mode is on. |
+| `<icon> auto · 2 blocked` | On, and 2 actions were blocked in this session (permission rule, hard-deny, or classifier). `/automode reset` clears the count. |
+| `<icon> checking…` | A classifier call is in flight. The previous text returns when it finishes. |
+| `<icon> off` | Disabled through configuration or `/automode off`. |
+
+On OMP the icon is the theme's shield glyph (`cmd.shield`) for the active symbol preset, or `icon.auto` when the preset has no shield (ascii). Pi themes have no icons, so the extension uses `●`. Use `/automode status` for the full counters.
+
+### Placing the status in OMP
+
+By default OMP draws extension statuses as an extra row under the editor. To show the status inside the status bar, set `status` in `statusLine.leftSegments` or `statusLine.rightSegments`, which requires `statusLine.preset: custom`. OMP also keeps drawing the extra row while `status` is in the bar, so the text appears twice. Set `statusLine.showHookStatus: false` to drop the row. The `status` segment still lists every extension status, joined with `·`.
+
+```yaml
+# ~/.omp/agent/config.yml
+statusLine:
+  preset: custom
+  showHookStatus: false
+  leftSegments: [pi, model, mode, path, git, status]
+  rightSegments: [context_pct]
 ```
 
-- `AM` — auto-mode prefix. `●` means enabled. `○` means disabled through configuration or `/automode off`.
-- `a:` — actions allowed so far (checked minus denied).
-- `d:` — actions denied so far, for any reason (permission rule, deterministic hard-deny, or classifier).
-- `ca:` / `cd:` — classifier decisions split into allowed and denied. These segments appear after the first classifier call. `d:` counts all denials, so `d:` is always `>= cd:`.
+OMP strips colors from statuses shown in the bar, so the text carries all of the meaning.
 
 ## Docs
 

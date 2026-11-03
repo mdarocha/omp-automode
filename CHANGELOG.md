@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Compact status segment** — The status is now one segment with an icon: `<icon> auto`, `<icon> auto · N blocked`, `<icon> off`, and `<icon> checking…` while a classifier call is in flight. On OMP the icon is the theme's shield glyph, falling back to `icon.auto`; Pi shows `●`. The `a:`/`d:`/`ca:`/`cd:` counters moved out of the status; `/automode status` still reports them. The README explains how to place the status inside OMP's status bar and why `statusLine.showHookStatus: false` avoids a duplicate row
 ### Fixed
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
 ## Fork features
