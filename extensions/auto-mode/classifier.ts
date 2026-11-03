@@ -849,11 +849,21 @@ export function classifierCacheSessionId(ctx: ExtensionContext): string {
   return `pi-automode-${digest}`;
 }
 
+/** The `<extension-notes>` block of the classifier context; empty without notes. */
+function buildExtensionNotes(notes: readonly string[]): string {
+  if (notes.length === 0) {
+    return "";
+  }
+  const lines = notes.map((note) => `- ${note}`).join("\n");
+  return `\n\n<extension-notes>\n${lines}\n</extension-notes>`;
+}
+
 export const defaultClassifyAction: ClassifyAction = async (
   ctx,
   config,
   action,
   loadedContext,
+  notes = [],
 ): Promise<ClassifyResult> => {
   const systemPrompt = buildClassifierPrompt(config);
   const transcript = buildClassifierTranscript(ctx, {
@@ -864,7 +874,7 @@ export const defaultClassifyAction: ClassifyAction = async (
     loadedContext || "(none)"
   }\n</loaded-project-instructions>\n\n<classifier-transcript>\n${
     transcript || "(none)"
-  }\n</classifier-transcript>`;
+  }\n</classifier-transcript>${buildExtensionNotes(notes)}`;
   if (jevModelId(config.classifierModel)) {
     return classifyWithJev(config, action, contextText, systemPrompt, ctx.signal);
   }

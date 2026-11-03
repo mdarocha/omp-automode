@@ -17,11 +17,13 @@ import {
   DEFAULT_ENVIRONMENT,
   DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
   DEFAULT_HARD_DENY,
+  DEFAULT_HEADLESS_ASK,
   DEFAULT_LOG_CONFIG,
   DEFAULT_MAX_TOOL_TRANSCRIPT_TOKENS,
   DEFAULT_MAX_USER_TRANSCRIPT_TOKENS,
   DEFAULT_PROTECTED_PATHS,
   DEFAULT_SOFT_DENY,
+  HEADLESS_ASK_MODES,
   MAX_CLASSIFIER_TIMEOUT_MS,
   PI_GLOBAL_SETTINGS,
   PI_LEGACY_GLOBAL_SETTINGS,
@@ -40,6 +42,7 @@ import type {
   ClassifierReasoningLevel,
   ConfigLoadResult,
   EffectiveConfig,
+  HeadlessAskMode,
   LoadedSettingsFile,
   LogConfig,
   SettingsFile,
@@ -287,6 +290,7 @@ export function validateSettingsFile(
         "classifyReadOnlyTools",
         "fastClassifierMaxTokens",
         "allowInsideWorkingDirectory",
+        "headlessAsk",
         "deniedPaths",
         "maxUserTranscriptTokens",
         "maxToolTranscriptTokens",
@@ -358,6 +362,14 @@ export function validateSettingsFile(
       ) {
         diagnostics.push(
           `${source}: autoMode.allowInsideWorkingDirectory must be a boolean`,
+        );
+      }
+      if (
+        hasOwn(autoMode, "headlessAsk") &&
+        !isHeadlessAskMode(autoMode.headlessAsk)
+      ) {
+        diagnostics.push(
+          `${source}: autoMode.headlessAsk must be one of ${HEADLESS_ASK_MODES.join(", ")}`,
         );
       }
       validateDeniedPathsSetting(
@@ -596,6 +608,10 @@ function isValidClassifierModel(value: unknown): value is string {
   return typeof value === "string" && parseModelSpec(value) !== undefined;
 }
 
+function isHeadlessAskMode(value: unknown): value is HeadlessAskMode {
+  return HEADLESS_ASK_MODES.includes(value as HeadlessAskMode);
+}
+
 function validTranscriptBudget(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 32;
 }
@@ -633,6 +649,9 @@ function applyAutoModeScalars(
       typeof settings.allowInsideWorkingDirectory === "boolean"
         ? settings.allowInsideWorkingDirectory
         : base.allowInsideWorkingDirectory,
+    headlessAsk: isHeadlessAskMode(settings.headlessAsk)
+      ? settings.headlessAsk
+      : base.headlessAsk,
     fastClassifierMaxTokens: validFastClassifierBudget(
         settings.fastClassifierMaxTokens,
       )
@@ -686,6 +705,7 @@ export function buildEffectiveConfigFromSources(
     enabled: true,
     classifyReadOnlyTools: DEFAULT_CLASSIFY_READ_ONLY_TOOLS,
     allowInsideWorkingDirectory: DEFAULT_ALLOW_INSIDE_WORKING_DIRECTORY,
+    headlessAsk: DEFAULT_HEADLESS_ASK,
     deniedPaths: [...DEFAULT_DENIED_PATHS],
     fastClassifierMaxTokens: DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
     classifierTimeoutMs: DEFAULT_CLASSIFIER_TIMEOUT_MS,

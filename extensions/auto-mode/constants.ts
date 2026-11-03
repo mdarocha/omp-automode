@@ -1,5 +1,6 @@
 import os from "node:os";
 import { resolve } from "node:path";
+import type { HeadlessAskMode } from "./types.ts";
 
 export const HOME = os.homedir();
 
@@ -230,6 +231,15 @@ export const DEFAULT_FAST_CLASSIFIER_MAX_TOKENS = 512;
  * outside-CWD file access is routed to the classifier.
  */
 export const DEFAULT_ALLOW_INSIDE_WORKING_DIRECTORY = false;
+
+/** Accepted `headlessAsk` values; see `HeadlessAskMode`. */
+export const HEADLESS_ASK_MODES: readonly HeadlessAskMode[] = ["parent", "classifier", "block"];
+
+/**
+ * Default for a `permissions.ask` match in a session without UI: ask the
+ * nearest ancestor session that has one, and block when there is none.
+ */
+export const DEFAULT_HEADLESS_ASK: HeadlessAskMode = "parent";
 
 /** Default path deny list: empty (no built-in secrets list). */
 export const DEFAULT_DENIED_PATHS: string[] = [];

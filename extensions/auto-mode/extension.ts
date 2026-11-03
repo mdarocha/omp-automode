@@ -13,6 +13,19 @@ import {
   defaultClassifyAction,
   serializeClassifierAction,
 } from "./classifier.ts";
+import {
+  agentIdOf,
+  ASK_DIALOG_TITLE,
+  askDialogMessage,
+  findAskingAncestor,
+  FORWARDED_ASK_TIMEOUT_MS,
+  forwardedAskMessage,
+  forwardedAskTitle,
+  headlessAskNote,
+  registerSession,
+  releaseSession,
+  type SessionRecord,
+} from "./ask-forwarding.ts";
 import { analyzeBash, type BashAnalysis } from "./bash.ts";
 import {
   AUTO_MODE_GUIDANCE,
@@ -268,6 +281,9 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     let enabledOverride: EnabledOverride = {};
     let loadedContext = "";
     let globalConfigNoticeShown = false;
+    let sessionRecord: SessionRecord | undefined;
+    // Dialogs this session has open in an ancestor's UI, closed on shutdown.
+    const pendingAsks = new Set<AbortController>();
     // How the per-session state above was set up. OMP never emits
     // `session_start` for `/tan` clones, so a session that gets a hook call
     // first is initialised by `ensureSession` instead.
@@ -283,6 +299,9 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       const restored = restoreState(ctx);
       state = restored.state;
       enabledOverride = bindEnabledOverride(ctx, restored.enabledOverride);
+      // Register on both start paths: a `/tan` clone's subagents also look
+      // their ancestors up in this registry.
+      sessionRecord = registerSession(ctx);
       sessionInit = source;
     }
 
@@ -500,6 +519,12 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     pi.on("session_shutdown", (_event, ctx) => {
       releaseEnabledOverride(ctx, enabledOverride);
       sessionInit = undefined;
+      if (sessionRecord) {
+        releaseSession(ctx, sessionRecord);
+      }
+      for (const pending of pendingAsks) {
+        pending.abort();
+      }
     });
 
     pi.on("before_agent_start", (event, ctx) => {
@@ -625,6 +650,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       }
 
       let askRequiresClassifier = false;
+      const classifierNotes: string[] = [];
       for (const pattern of cfg.permissionAsk) {
         if (
           !matchesToolPattern(
@@ -638,41 +664,80 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         ) {
           continue;
         }
-        if (!ctx.hasUI) {
-          const matchedCommand = matchedCommandSummary(
-            matchingBashCommandText(pattern, bashAnalysis),
-          );
+        const matchedCommand = matchedCommandSummary(
+          matchingBashCommandText(pattern, bashAnalysis),
+        );
+        const blockAsk = (reason: string) => {
           if (isOwnedInspection) state.checkedActions += 1;
           return block(ctx, {
             timestamp: Date.now(),
             toolName: event.toolName,
-            reason:
+            reason,
+            action: summary,
+            kind: "permissions.ask",
+          }, logCtx);
+        };
+        let allowed: boolean;
+        let timedOut = false;
+        if (ctx.hasUI) {
+          allowed = await ctx.ui.confirm(ASK_DIALOG_TITLE, askDialogMessage(pattern.raw, summary), {
+            signal: ctx.signal,
+          });
+        } else if (cfg.headlessAsk === "classifier") {
+          askRequiresClassifier = true;
+          classifierNotes.push(headlessAskNote(pattern.raw));
+          continue;
+        } else {
+          const ancestor = cfg.headlessAsk === "parent"
+            ? findAskingAncestor(ctx)
+            : undefined;
+          if (!ancestor) {
+            return blockAsk(
               `Matched permissions.ask (${pattern.raw})${
                 matchedCommand ? ` for command: ${matchedCommand}` : ""
-              } but no UI is available`,
-            action: summary,
-            kind: "permissions.ask",
-          }, logCtx);
+              } but no UI is available${
+                cfg.headlessAsk === "parent" ? " here or in a parent session" : ""
+              }`,
+            );
+          }
+          const dialog = new AbortController();
+          pendingAsks.add(dialog);
+          const deadline = setTimeout(() => {
+            timedOut = true;
+            dialog.abort();
+          }, FORWARDED_ASK_TIMEOUT_MS);
+          try {
+            allowed = await ancestor.ui.confirm(
+              forwardedAskTitle(agentIdOf(ctx)),
+              forwardedAskMessage(pattern.raw, summary),
+              {
+                signal: ctx.signal
+                  ? AbortSignal.any([ctx.signal, dialog.signal])
+                  : dialog.signal,
+              },
+            );
+          } catch (error) {
+            // Fail closed: an ancestor whose UI is gone cannot approve.
+            return blockAsk(
+              `Could not ask the parent session about permissions.ask (${pattern.raw}): ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          } finally {
+            clearTimeout(deadline);
+            pendingAsks.delete(dialog);
+          }
         }
-        const allowed = await ctx.ui.confirm(
-          "Auto mode permission ask",
-          `Rule: ${pattern.raw}\n\nAction:\n${summary}\n\nAllow this action to continue to auto-mode classification?`,
-          { signal: ctx.signal },
-        );
         if (!allowed) {
-          const matchedCommand = matchedCommandSummary(
-            matchingBashCommandText(pattern, bashAnalysis),
-          );
-          if (isOwnedInspection) state.checkedActions += 1;
-          return block(ctx, {
-            timestamp: Date.now(),
-            toolName: event.toolName,
-            reason: `Declined permissions.ask: ${pattern.raw}${
+          return blockAsk(
+            `${
+              timedOut
+                ? `No answer from the parent session within ${FORWARDED_ASK_TIMEOUT_MS / 1000}s for permissions.ask`
+                : "Declined permissions.ask"
+            }: ${pattern.raw}${
               matchedCommand ? `; matched command: ${matchedCommand}` : ""
             }`,
-            action: summary,
-            kind: "permissions.ask",
-          }, logCtx);
+          );
         }
         askRequiresClassifier = true;
       }
@@ -846,6 +911,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         cfg,
         serializeClassifierAction(event.toolName, input),
         loadedContext,
+        classifierNotes,
       );
       logClassifierIo(decision, logCtx);
       if (decision.decision === "allow") {

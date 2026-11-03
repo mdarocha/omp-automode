@@ -7,7 +7,7 @@ All notable changes to this project are documented in this file.
 ### Added
 - **OMP config directory** — Under OMP, store the global config at `<agentDir>/automode/config.json` and project config at `.omp/automode.local.json` and `.omp/automode.json`. `<agentDir>` comes from OMP's `getAgentDir()`, so profiles and `PI_CONFIG_DIR` apply. A Pi global config moves there once at startup, with ADR-002 conflict and error handling. Project files fall back to `.pi/` per file when `.omp/` lacks them and are never moved. In-memory session logs go to `<agentDir>/automode/logs/`. `/automode config` and `automode_inspect` report the selected files as `configSources`. Pi keeps its existing paths. See ADR-003.
 - **OMP safety-control paths** — Hard-deny direct writes and edits to `.omp/automode*`, `<agentDir>/automode/`, and `<agentDir>/extensions/`, as `.pi/automode*` and `~/.pi/agent/extensions/` already are. Add `.omp` to the default protected paths.
-
+- **`permissions.ask` in subagents** — A `permissions.ask` match in a session without UI, such as an OMP subagent, used to block the call. The new `autoMode.headlessAsk` setting chooses what happens: `parent` (default) shows the dialog in the nearest ancestor session of the same process that has a UI, titled with the asking agent's name, and blocks the call when nobody answers within 25 seconds or no ancestor is found; `classifier` skips the question and sends the call to the classifier with a note that the rule matched in a session without UI; `block` keeps the previous behavior. Shared project `.pi/automode.json` cannot set it.
 ### Removed
 - **`/auto-mode` command alias** — Only `/automode` is registered. Previously both names appeared in command completion with identical behavior
 

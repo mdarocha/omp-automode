@@ -2,6 +2,7 @@ import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	DEFAULT_HEADLESS_ASK,
 	DEFAULT_LOG_CONFIG,
 	DEFAULT_PROTECTED_PATHS,
 	analyzeBash,
@@ -153,6 +154,7 @@ export function baseConfig(overrides: Partial<EffectiveConfig> = {}): EffectiveC
 		enabled: true,
 		classifyReadOnlyTools: false,
 		allowInsideWorkingDirectory: false,
+		headlessAsk: DEFAULT_HEADLESS_ASK,
 		deniedPaths: [],
 		fastClassifierMaxTokens: 512,
 		classifierTimeoutMs: 20_000,

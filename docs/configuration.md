@@ -75,6 +75,14 @@ A matching path blocks the call without classifier review or an override. The li
 
 Shared project `.pi/automode.json` cannot set either field. Omitting either field at a higher-precedence source does not clear a lower-source value.
 
+`headlessAsk` sets what a `permissions.ask` match does in a session that has no UI, such as an OMP subagent or `/tan` clone. A session with its own UI always asks its own user. The default is `parent`. The setting uses scalar precedence like `allowInsideWorkingDirectory`, and shared project `.pi/automode.json` cannot set it.
+
+- `parent` asks the nearest ancestor session in the same process that has a UI. The dialog title names the asking agent. A decline, an abort, no answer within 25 seconds, or an ancestor that cannot be found blocks the call. An accepted dialog works as it does in a session with its own UI: the call continues through the deterministic checks to the classifier.
+- `classifier` does not ask. The call skips every allow tier and reaches the classifier, which receives a note that the rule matched in a session without UI. If the classifier allows the call, it runs without any user approval, so this is the weakest setting. Use it only when you accept the classifier as the sole reviewer of calls your ask rules mark as sensitive.
+- `block` blocks the call.
+
+The lookup for `parent` uses the session header of the asking session, which names its parent by session file or session id. It finds only sessions of the same process, and a parent that has shut down is gone. OMP lets an extension's `tool_call` handler work for 30 seconds (`extensionHandlers.toolCallTimeoutMs`) and does not pause that clock for a dialog in another session's UI. For that reason a forwarded dialog closes after 25 seconds and the asking call is blocked. Subagents that ask at the same time queue in the parent's UI, and each one's 25 seconds start when it asks, not when its dialog appears.
+
 Example:
 
 ```json
@@ -86,6 +94,7 @@ Example:
     "fastClassifierMaxTokens": 512,
     "classifierTimeoutMs": 20000,
     "allowInsideWorkingDirectory": false,
+    "headlessAsk": "parent",
     "deniedPaths": [],
     "maxUserTranscriptTokens": 4000,
     "maxToolTranscriptTokens": 4000,

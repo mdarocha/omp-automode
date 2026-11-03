@@ -10,8 +10,8 @@ For each Pi `tool_call` event, the extension does this:
 2. If auto mode is disabled, ignore the call.
 3. If the agent turn was cancelled, block the call.
 4. Block a matching `permissions.deny` rule.
-5. If a `permissions.ask` rule matches, ask the user.
-6. If the user declines or no UI is available, block the call.
+5. If a `permissions.ask` rule matches, ask the user. A session without UI asks the nearest ancestor session that has one, or follows `headlessAsk`.
+6. If the user declines or nobody can be asked, block the call.
 7. Mark an accepted ask call for required classifier review.
 8. Run deterministic hard-deny checks.
 9. If no accepted ask rule requires review, let the extension-owned `automode_inspect` tool run locally.
@@ -38,7 +38,12 @@ flowchart TD
   F -- no --> G{Matches permissions.ask?}
 
   G -- yes --> H{UI available?}
-  H -- no --> H1[Block locally]
+  H -- no --> H2{headlessAsk}
+  H2 -- block --> H1[Block locally]
+  H2 -- classifier --> J
+  H2 -- parent --> H3{Ancestor with UI?}
+  H3 -- no --> H1
+  H3 -- yes --> I
   H -- yes --> I[Ask user]
   I -- declined --> I1[Block locally]
   I -- accepted --> J[Require classifier review]
@@ -159,9 +164,9 @@ The `*` wildcard matches zero or more characters, including newlines and path se
 
 `permissions.ask` runs after `permissions.deny`.
 
-If a rule matches without an available UI, pi-automode blocks the action. If a UI is available, pi-automode shows a confirmation dialog.
+If a rule matches in a session with a UI, pi-automode shows a confirmation dialog. The dialog contains the matched rule and the action summary.
 
-The dialog contains the matched rule and the action summary.
+If a rule matches in a session without a UI, `headlessAsk` decides. The default `parent` shows the dialog in the nearest ancestor session of the same process that has a UI, with the asking agent's name in the title, and waits 25 seconds. `classifier` skips the dialog, treats the rule as matched, and adds a note to the classifier context. `block` blocks the call. With `parent`, a missing ancestor, a decline, a timeout, or an abort blocks the call. See [Configuration](configuration.md) for the security trade-offs.
 
 Approving that dialog does not run the tool directly. Deterministic denial checks continue first. After these checks pass, the classifier reviews the call. The call cannot use `allowInsideWorkingDirectory`, `permissions.allow`, or the read-only fast path.
 
@@ -301,6 +306,16 @@ ${loadedContext || "(none)"}
 ${buildClassifierTranscript(...) || "(none)"}
 </classifier-transcript>
 ```
+
+When `headlessAsk` is `classifier` and a `permissions.ask` rule matched in a session without UI, the message ends with an `<extension-notes>` block. The block holds a note from the extension, not from the transcript:
+
+```text
+<extension-notes>
+- A permissions.ask rule (bash(git push*)) matched this action, but this session has no interactive UI, so no user approved it. ...
+</extension-notes>
+```
+
+Without notes, the block is absent.
 
 The next user message contains the complete current action as JSON. It is
 separate from the transcript. Pi-automode does not truncate it:
