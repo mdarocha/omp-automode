@@ -220,6 +220,37 @@ test("Bash analysis keeps redirects separate from command words", () => {
 	]);
 });
 
+test("Bash analysis marks commands in loops and functions as repeated", () => {
+	const analysis = analyzeBash(
+		"a; for i in 1; do b; done; while c; do d; done; f() { e; }; g; eval 'h' && echo $(i)",
+	);
+
+	assert.deepEqual(
+		analysis.commands.map((command) => [command.name, command.repeated]),
+		[
+			["a", false],
+			["b", true],
+			["c", true],
+			["d", true],
+			["e", true],
+			["g", false],
+			["eval", false],
+			["h", false],
+			["echo", false],
+			["i", false],
+		],
+	);
+	assert.equal(analyzeBash("for i in 1; do echo $(cd /; pwd); done").commands.at(-1)?.repeated, true);
+	assert.equal(analyzeBash("for i in 1; do eval 'cd /'; done").commands.at(-1)?.repeated, true);
+});
+
+test("Bash analysis separates redirects on compound commands from simple commands", () => {
+	const analysis = analyzeBash("a > one; { b; } > two; f() { c; } > three; (d) 2> four; e >&2 | g > five");
+
+	assert.deepEqual(analysis.writeRedirectTargets, ["one", "two", "three", "four", "five"]);
+	assert.deepEqual(analysis.groupWriteRedirectTargets, ["two", "three", "four"]);
+});
+
 test("Bash analysis reports malformed input and keeps its partial tree", () => {
 	const analysis = analyzeBash('echo safe && git push "unterminated');
 

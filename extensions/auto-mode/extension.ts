@@ -785,6 +785,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
             commands: [],
             redirects: [],
             writeRedirectTargets: [],
+            groupWriteRedirectTargets: [],
             structure: [],
             allowStructureSafe: false,
             errors: [{
