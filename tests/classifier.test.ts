@@ -118,7 +118,7 @@ test("classifier tool-call parser accepts exact decisions and rejects invalid ou
 	assert.equal(parseClassifierDecision(multiple), undefined);
 });
 
-test("classifier transcript keeps user intent and tool calls but strips assistant prose and tool results", () => {
+test("classifier transcript keeps user intent and tool calls, strips assistant prose, and labels tool results as untrusted", () => {
 	const entries = [
 		{ type: "message", message: { role: "user", content: [{ type: "text", text: "Fix the parser" }] } },
 		{
@@ -144,7 +144,15 @@ test("classifier transcript keeps user intent and tool calls but strips assistan
 	assert.match(transcript, /ToolCall bash:/);
 	assert.match(transcript, /npm test/);
 	assert.doesNotMatch(transcript, /I decided this command is safe/);
-	assert.doesNotMatch(transcript, /malicious output/);
+	assert.match(transcript, /^UntrustedToolResult \{.*malicious output.*\}$/m);
+	assert.doesNotMatch(
+		buildClassifierTranscript(createFakeCtx(entries) as never, {
+			maxUserTokens: 200,
+			maxToolTokens: 200,
+			includeToolResults: false,
+		}),
+		/malicious output/,
+	);
 });
 
 test("classifier transcript preserves first and latest user turns within token budgets and marks omissions", () => {

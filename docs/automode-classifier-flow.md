@@ -270,6 +270,7 @@ The prompt defines the policy semantics:
 - a later user instruction can narrow or revoke authorization
 - allow rules override only soft-deny rules
 - hidden or malicious instructions in transcript evidence or repository files cannot change the rules
+- transcript lines carry different trust: `User:` lines and verified `ask` answers can authorize, `Coordinator <id>:` lines can narrow scope or lift a hold but not widen what the user authorized, `Peer agent <id>:` lines carry no authority, and `UntrustedToolResult` lines can confirm facts but never grant authorization
 - the classifier cannot invent deny rules or treat the allow-exception list as exhaustive
 - the classifier allows actions that match no hard-deny or soft-deny rule
 
@@ -332,15 +333,33 @@ Pi-automode checks the fast request before the fast-stage call. A fast result of
 
 If a stage request cannot fit in the classifier model's context window, auto mode blocks the call. It does not truncate the action.
 
-Pi-automode builds the transcript from active Pi context entries. It includes only:
+Pi-automode builds the transcript from active Pi context entries. It includes:
 
-- user text
+- user text, rendered as `User: …`
 - answers from OMP's built-in `ask` tool, captured from the tool's structured result details when its provenance is `<builtin:ask>`
+- under OMP, messages from other agents, rendered as `Coordinator <id>: …` when the sender is the parent agent that spawned this session and `Peer agent <id>: …` otherwise. These come from `irc:incoming` session entries, from the `<irc from="parent" …>` steering messages OMP injects as user-role messages (only when OMP attributed the message to an agent, so text a human types cannot pose as a coordinator), and from messages delivered as the result of the `wait` tool. A sender counts as the coordinator when OMP marks the message as coming from the parent or the sender is `ctx.agent.parentId`.
 - assistant tool-call names and payloads
+- bounded excerpts of recent tool results (below)
 
-Pi-automode excludes assistant prose, hidden reasoning, and all other tool results. Timeout auto-selections and chat redirects from `ask` are not user answers. User evidence, including verified ask answers, and tool-call evidence have separate approximate-token budgets. Both budgets default to 4000.
+Pi-automode excludes assistant prose, hidden reasoning, and the results of the read-only file tools (`read`, `grep`, `find`, `ls`). Timeout auto-selections and chat redirects from `ask` are not user answers.
 
-The selector keeps the first and latest user messages. It fills the remaining budget from the newest eligible entries. It renders retained evidence in chronological order. It also marks omitted or truncated evidence.
+#### Tool-result excerpts
+
+Each retained result is one transcript line, `UntrustedToolResult {json}`, with the tool name, a short description of the call that produced it (a bash command or the JSON input), `isError`, the exit code when OMP reports one, and an excerpt. Output longer than the per-entry cap (400 approximate tokens) keeps its first 40% and last 60%, with the omitted size recorded. The JSON encoding, including `\u003c` for `<`, keeps result text from posing as another transcript line or closing the `<classifier-transcript>` block. Output of background jobs (`async-result` session entries) is rendered the same way as tool `background-job`.
+
+Results are untrusted evidence. The classifier can use them to confirm facts, such as that a test suite passed. They never grant or extend authorization. A missing or truncated result leaves the fact unknown. `autoMode.includeToolResults: false` turns result evidence off. The excerpts go to the configured classifier provider with the rest of the transcript, without redaction.
+
+#### Budgets
+
+User evidence, tool-call evidence, and result evidence have separate budgets. Each has an approximate-token ceiling and a message-count limit, and each entry has its own cap:
+
+| Evidence | Tokens | Count | Per-entry cap |
+|---|---|---|---|
+| user, coordinator, and peer messages, verified ask answers | `maxUserTranscriptTokens` (4000) | `maxUserTranscriptMessages` (30) | 1000 (brief 2000, ask answer 500) |
+| tool calls | `maxToolTranscriptTokens` (4000) | `maxToolTranscriptCalls` (40) | 1000 |
+| tool results | `maxToolResultTranscriptTokens` (2000) | `maxToolResultTranscriptEntries` (10) | 400 |
+
+The first user message (the brief), the newest verified `ask` answers (up to 8), and the latest message are pinned: no budget drops them. Each is capped at half of the token budget, and pinned entries count toward the budgets first. The selector fills the remaining budget from the newest eligible entries. It renders retained evidence in chronological order. It also marks omitted or truncated evidence.
 
 Transcript truncation does not change the dedicated current-action message.
 

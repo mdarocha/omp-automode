@@ -7,6 +7,7 @@
  */
 
 export * from "./auto-mode/agent-hub.ts";
+export * from "./auto-mode/agent-messages.ts";
 export * from "./auto-mode/ask-forwarding.ts";
 export * from "./auto-mode/classifier.ts";
 export * from "./auto-mode/classifier-errors.ts";
@@ -22,6 +23,7 @@ export * from "./auto-mode/model-selector.ts";
 export * from "./auto-mode/paths.ts";
 export * from "./auto-mode/permissions.ts";
 export * from "./auto-mode/state.ts";
+export * from "./auto-mode/tool-results.ts";
 export * from "./auto-mode/transcript.ts";
 export * from "./auto-mode/types.ts";
 
