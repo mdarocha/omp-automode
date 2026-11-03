@@ -116,18 +116,20 @@ Hard-deny rules cannot be overridden by `allow` or by user intent.
 
 ### Classifier transcript budgets
 
-Classifier evidence has separate approximate-token budgets for user messages and assistant tool-call payloads:
+Classifier evidence has separate approximate-token budgets and message-count limits for user messages, assistant tool-call payloads, and tool-result excerpts:
 
-- `maxUserTranscriptTokens`: 4000
-- `maxToolTranscriptTokens`: 4000
+- `maxUserTranscriptTokens`: 4000, `maxUserTranscriptMessages`: 30
+- `maxToolTranscriptTokens`: 4000, `maxToolTranscriptCalls`: 40
+- `maxToolResultTranscriptTokens`: 2000, `maxToolResultTranscriptEntries`: 10
+- `includeToolResults`: `true`
 
-The selector keeps the first and latest user messages as intent anchors. It fills the remaining space from the newest eligible entries.
+The selector pins the first user message (the brief), the newest verified `ask` answers, and the latest message. It fills the remaining space from the newest eligible entries.
 
-The selector limits individual entries. It marks omitted or truncated evidence in the classifier transcript. It excludes assistant prose and tool results, except verified answers from OMP's built-in `ask` tool.
+The selector limits individual entries: 1000 approximate tokens for a message or tool call (2000 for the brief, 500 for an ask answer) and 400 for a tool result. It marks omitted or truncated evidence in the classifier transcript. It excludes assistant prose and the results of `read`, `grep`, `find`, and `ls`. Other tool results appear as untrusted excerpts, and messages from a coordinator or peer agent appear under the sender's name.
 
 These limits use approximate character counts. They do not guarantee the same result as a provider tokenizer.
 
-To change a limit, set an integer of at least 32 in a Pi-owned `autoMode` configuration source. Pi-automode does not support the former `maxTranscriptLines` field.
+To change a token budget, set an integer of at least 32 in a Pi-owned `autoMode` configuration source. Count limits accept integers of at least 1. Pi-automode does not support the former `maxTranscriptLines` field.
 
 ### Classifier request timeout
 

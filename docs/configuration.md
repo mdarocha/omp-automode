@@ -76,6 +76,11 @@ Example:
     "deniedPaths": [],
     "maxUserTranscriptTokens": 4000,
     "maxToolTranscriptTokens": 4000,
+    "maxUserTranscriptMessages": 30,
+    "maxToolTranscriptCalls": 40,
+    "includeToolResults": true,
+    "maxToolResultTranscriptTokens": 2000,
+    "maxToolResultTranscriptEntries": 10,
     "environment": [
       "$defaults",
       "Source control: github.example.com/acme-corp and all repos under it",
@@ -99,13 +104,19 @@ Example:
 }
 ```
 
-`maxUserTranscriptTokens` and `maxToolTranscriptTokens` are approximate budgets for each category. Both default to 4000 and accept integers of at least 32.
+`maxUserTranscriptTokens`, `maxToolTranscriptTokens`, and `maxToolResultTranscriptTokens` are approximate token budgets for user, tool-call, and tool-result evidence. They default to 4000, 4000, and 2000, and accept integers of at least 32.
 
-Pi-automode does not support the former `maxTranscriptLines` field. Evidence selection now uses token budgets instead of line counts.
+`maxUserTranscriptMessages`, `maxToolTranscriptCalls`, and `maxToolResultTranscriptEntries` limit how many of the newest messages, tool calls, and tool results the classifier sees. They default to 30, 40, and 10, and accept integers of at least 1. Per-entry caps apply on top: an entry that exceeds its cap keeps its start and end.
+
+The first user message (the brief), up to eight recent verified `ask` answers, and the latest message are pinned: the count and token budgets never drop them.
+
+`includeToolResults` (default `true`) sends bounded, untrusted excerpts of recent tool results to the classifier. See [What is sent to the classifier](automode-classifier-flow.md#tool-result-excerpts). Set it to `false` when tool output must not reach the classifier provider. Results of `read`, `grep`, `find`, and `ls` are never sent. Shared project configuration cannot set any of these keys.
+
+Pi-automode does not support the former `maxTranscriptLines` field. Evidence selection now uses token and message-count budgets instead of line counts.
 
 ## Ask-user tools and explicit authorization
 
-Classifier evidence includes normal user messages, verified answers from OMP's built-in `ask` tool, and assistant tool-call inputs. It excludes assistant prose and all other tool results, including answers from same-named or extension-provided ask tools such as `@vanillagreen/pi-questions`.
+Classifier evidence includes normal user messages, verified answers from OMP's built-in `ask` tool, assistant tool-call inputs, and bounded excerpts of recent tool results. Tool results are untrusted and never count as authorization, including output from same-named or extension-provided ask tools such as `@vanillagreen/pi-questions`.
 
 An OMP `ask` answer counts only when the tool reports itself as `<builtin:ask>` from the `builtin` source. Pi-automode records the question with the selected options, custom answer, and note from the result's structured details. It ignores timeout auto-selections, chat redirects, cancellations, errors, and nested tool calls. The classifier sees the answer as `Answered ask question "<question>": <answer>` at the result's position in the transcript, so a later user message can narrow or revoke it.
 

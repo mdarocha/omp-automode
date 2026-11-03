@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Tool results and agent messages in classifier evidence** — The classifier now sees bounded excerpts of recent tool results as `UntrustedToolResult` lines. Each carries the call, `isError`, the exit code, and the start and end of the output. The policy prompt says results can confirm facts such as passing tests but never grant authorization. Results of `read`, `grep`, `find`, and `ls` are left out. Under OMP, `irc:incoming` entries, `<irc from="parent">` steering messages, messages delivered by `wait`, and background-job results are included and attributed: `Coordinator <id>:` for the parent agent, `Peer agent <id>:` for anyone else. Neither counts as direct user authorization. Previously these were invisible and caused false positives such as a PR body's "all tests passed" claim being blocked as unverified. Set `autoMode.includeToolResults: false` to turn result evidence off.
+- **Pinned brief and ask answers, message-count budgets** — The first user message (the brief, now capped at 2000 approximate tokens instead of 1000), up to eight verified `ask` answers, and the latest message are never dropped by the transcript budget. New settings `maxUserTranscriptMessages` (30), `maxToolTranscriptCalls` (40, previously fixed), `maxToolResultTranscriptTokens` (2000), `maxToolResultTranscriptEntries` (10), and `includeToolResults` (`true`) sit beside the existing token budgets, which keep working unchanged.
+
 ### Fixed
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
 ## Fork features
