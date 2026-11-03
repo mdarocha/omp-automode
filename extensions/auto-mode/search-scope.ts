@@ -7,6 +7,7 @@ import {
   withoutTrailingSlash,
 } from "./permissions.ts";
 import {
+  parseJsonPathArray,
   resolvePathForPolicy,
   resolveToolInputPath,
   splitPathList,
@@ -181,17 +182,8 @@ function appendExclusions(
   exclusions: string[],
 ): string | undefined {
   const typed = value === undefined || value.trim() === "" ? "." : value;
-  const trimmed = typed.trim();
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-    try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")) {
-        return JSON.stringify([...parsed, ...exclusions]);
-      }
-    } catch {
-      // Not JSON: OMP reads it as one literal path.
-    }
-  }
+  const elements = parseJsonPathArray(typed);
+  if (elements) return JSON.stringify([...elements, ...exclusions]);
   const opens = typed.split("{").length - 1;
   const closes = typed.split("}").length - 1;
   if (opens !== closes || typed.includes("\\")) return undefined;
@@ -209,9 +201,13 @@ export function narrowGrepSearch(
   deniedPaths: string[],
 ): Record<string, unknown> | undefined {
   const typed = typeof input.path === "string" ? input.path : undefined;
-  const entries = typed === undefined || typed.trim() === ""
-    ? ["."]
-    : [typed, ...splitPathList(typed)];
+  let entries = ["."];
+  if (typed !== undefined && typed.trim() !== "") {
+    // A JSON-encoded array is only a list; any other value may also be one path.
+    entries = parseJsonPathArray(typed)
+      ? splitPathList(typed)
+      : [typed, ...splitPathList(typed)];
+  }
   const roots = grepSearchRoots(entries);
   if (roots === undefined) return undefined;
   const spellings = new Set<string>();

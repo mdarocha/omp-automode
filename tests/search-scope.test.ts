@@ -146,6 +146,11 @@ test("narrowGrepSearch handles omitted, JSON-array and glob paths", (t) => {
 		narrowGrepSearch({ pattern: "x", path: '["."]' }, base, denied)?.path,
 		JSON.stringify([".", ...exclusions]),
 	);
+	// Only the array elements are roots: neither `src` nor `docs` can reach the denied file.
+	assert.equal(
+		narrowGrepSearch({ pattern: "x", path: '["src","docs"]' }, base, denied)?.path,
+		'["src","docs"]',
+	);
 	// Exclusions are relative to the walked base of a glob path (`private`).
 	const privateExclusions = deniedSearchExclusions([join(base, "private")], denied) ?? [];
 	assert.deepEqual(privateExclusions.map((entry) => globToRegExp(entry.slice(1)).test("token.txt")), [true]);
