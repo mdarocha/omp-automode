@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **OMP model roles for the classifier** — `classifierModel` accepts OMP role selectors such as `@smol` and `@judge` next to `provider/model-id`. A role resolves to OMP's own chain for that role, including its cross-provider fallbacks, and the classifier uses the first chat-capable model that has credentials. Under OMP an unset `classifierModel` now means `@smol` (falling back to the session model when that role resolves to nothing); Pi still defaults to the session model. `/automode model @role`, `/automode status`, `/automode config`, and `automode_inspect` show the selector and the model it resolves to.
+
 ### Fixed
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
 ## Fork features

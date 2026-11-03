@@ -13,6 +13,10 @@ import {
   defaultClassifyAction,
   serializeClassifierAction,
 } from "./classifier.ts";
+import {
+  describeClassifierModel,
+  resolveClassifierModels,
+} from "./classifier-models.ts";
 import { analyzeBash, type BashAnalysis } from "./bash.ts";
 import {
   AUTO_MODE_GUIDANCE,
@@ -38,7 +42,13 @@ import {
   resolveLogPath,
   type Logger,
 } from "./log.ts";
-import { formatModelSpec, jevModelId, parseModelSpec } from "./model.ts";
+import {
+  formatModelSpec,
+  jevModelId,
+  parseClassifierSelector,
+  parseModelSpec,
+} from "./model.ts";
+import { loadOmpBridge } from "./omp.ts";
 import { promptForClassifierModel } from "./model-selector.ts";
 import {
   matchesAllowedToolPatterns,
@@ -267,9 +277,18 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       );
     }
 
+    async function classifierLabel(ctx: ExtensionContext): Promise<string> {
+      return describeClassifierModel(
+        ctx,
+        effectiveConfig(),
+        await loadOmpBridge(),
+      );
+    }
+
     function inspectAutomode(
       action: InspectionAction,
       ctx: ExtensionContext,
+      classifier: string,
     ): unknown {
       const cfg = effectiveConfig();
       if (action === "status") {
@@ -277,7 +296,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
           status: statusText(cfg, {
             ...state,
             lastReason: "omitted from model-visible inspection",
-          }),
+          }, classifier),
           state: {
             enabledOverride: enabledOverride.value,
             lastDecision: state.lastDecision,
@@ -291,6 +310,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       if (action === "config") {
         return {
           config: cfg,
+          classifier,
           logFile: resolveLogPath(
             ctx.sessionManager.getSessionFile?.(),
             ctx.sessionManager.getSessionDir?.() ?? "",
@@ -802,7 +822,11 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       }),
       async execute(_toolCallId, params, signal, _onUpdate, ctx) {
         if (signal?.aborted) throw new Error("Auto-mode inspection cancelled");
-        const result = inspectAutomode(params.action, ctx);
+        const result = inspectAutomode(
+          params.action,
+          ctx,
+          await classifierLabel(ctx),
+        );
         return {
           content: [{ type: "text", text: safeJson(result, 16000) }],
           details: result,
@@ -821,7 +845,10 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       const remainder = rest.join(" ").trim();
 
       if (command === "status") {
-        ctx.ui.notify(statusText(effectiveConfig(), state), "info");
+        ctx.ui.notify(
+          statusText(effectiveConfig(), state, await classifierLabel(ctx)),
+          "info",
+        );
         return;
       }
       if (command === "on") {
@@ -889,6 +916,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
           safeJson(
             {
               config: effectiveConfig(),
+              classifier: await classifierLabel(ctx),
               logFile,
               diagnostics: configDiagnostics,
             },
@@ -918,6 +946,20 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         if (jevModelId(selected)) {
           if (!process.env.TYPESAFE_API_KEY?.trim()) {
             ctx.ui.notify("Set TYPESAFE_API_KEY before selecting Jev.", "error");
+            return;
+          }
+          modelSpec = selected;
+        } else if (parseClassifierSelector(selected)?.kind === "role") {
+          const resolved = resolveClassifierModels(
+            ctx,
+            { classifierModel: selected },
+            await loadOmpBridge(),
+          );
+          if (resolved.models.length === 0) {
+            ctx.ui.notify(
+              resolved.problem ?? `${selected} resolves to no available model`,
+              "error",
+            );
             return;
           }
           modelSpec = selected;
@@ -968,7 +1010,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       }
 
       ctx.ui.notify(
-        "Usage: /automode [status|on|off|reload|reset|defaults|config|denials|model [provider/id]]",
+        "Usage: /automode [status|on|off|reload|reset|defaults|config|denials|model [provider/id|@role]]",
         "error",
       );
     }

@@ -28,7 +28,7 @@ import {
   PI_PROJECT_LOCAL_SETTINGS,
   PI_PROJECT_SHARED_SETTINGS,
 } from "./constants.ts";
-import { parseModelSpec } from "./model.ts";
+import { parseClassifierSelector } from "./model.ts";
 import {
   isMalformedToolPattern,
   MAX_WILDCARD_PATTERN_LENGTH,
@@ -313,7 +313,7 @@ export function validateSettingsFile(
         !isValidClassifierModel(autoMode.classifierModel)
       ) {
         diagnostics.push(
-          `${source}: autoMode.classifierModel must be a provider/model string`,
+          `${source}: autoMode.classifierModel must be a provider/model string or an @role selector`,
         );
       }
       if (
@@ -592,7 +592,8 @@ export function isClassifierReasoningLevel(
 }
 
 function isValidClassifierModel(value: unknown): value is string {
-  return typeof value === "string" && parseModelSpec(value) !== undefined;
+  return typeof value === "string" &&
+    parseClassifierSelector(value) !== undefined;
 }
 
 function validTranscriptBudget(value: unknown): value is number {

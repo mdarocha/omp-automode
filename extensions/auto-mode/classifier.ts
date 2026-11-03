@@ -16,7 +16,9 @@ import {
   CLASSIFIER_SYSTEM_PROMPT,
   DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
 } from "./constants.ts";
-import { formatModelSpec, jevModelId, parseModelSpec } from "./model.ts";
+import { resolveClassifierModels } from "./classifier-models.ts";
+import { formatModelSpec, jevModelId } from "./model.ts";
+import { loadOmpBridge } from "./omp.ts";
 import { classifyWithJev } from "./jev.ts";
 import { buildClassifierTranscript } from "./transcript.ts";
 import type {
@@ -59,6 +61,8 @@ type ClassifierResolution = {
     env?: Record<string, string>;
   };
   completionPlan?: ClassifierCompletionPlan;
+  /** Why no classifier could be resolved, for the fail-closed reason. */
+  problem?: string;
 };
 
 export function classifierReasoningForConfig(
@@ -73,42 +77,43 @@ async function resolveClassifier(
   ctx: ExtensionContext,
   config: EffectiveConfig,
 ): Promise<ClassifierResolution> {
-  const configured = config.classifierModel;
-  const model = configured
-    ? (() => {
-      const parsed = parseModelSpec(configured);
-      return parsed
-        ? ctx.modelRegistry.find(parsed.provider, parsed.id)
-        : undefined;
-    })()
-    : ctx.model;
-  if (!model) {
-    return {
-      reasoning: classifierReasoningForConfig(config.classifierReasoningLevel),
-    };
-  }
-
+  const { models, problem } = resolveClassifierModels(
+    ctx,
+    config,
+    await loadOmpBridge(),
+  );
   const { rawComplete, simpleComplete } = createRegistryCompletionFns(
     ctx.modelRegistry,
   );
-  const completionPlan = createClassifierCompletionPlan(
-    model,
-    config.classifierReasoningLevel,
-    rawComplete,
-    simpleComplete,
-  );
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) return { reasoning: completionPlan.reasoning };
-  return {
-    reasoning: completionPlan.reasoning,
-    classifier: {
-      model: auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model,
-      apiKey: auth.apiKey,
-      headers: auth.headers,
-      env: auth.env,
-    },
-    completionPlan,
-  };
+  let reasoning = classifierReasoningForConfig(config.classifierReasoningLevel);
+  let authProblem: string | undefined;
+  // A role chain can list models whose provider has no credentials here; use
+  // the first one that can authenticate.
+  for (const model of models) {
+    const completionPlan = createClassifierCompletionPlan(
+      model,
+      config.classifierReasoningLevel,
+      rawComplete,
+      simpleComplete,
+    );
+    reasoning = completionPlan.reasoning;
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok) {
+      authProblem ??= `${formatModelSpec(model)}: ${auth.error}`;
+      continue;
+    }
+    return {
+      reasoning,
+      classifier: {
+        model: auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model,
+        apiKey: auth.apiKey,
+        headers: auth.headers,
+        env: auth.env,
+      },
+      completionPlan,
+    };
+  }
+  return { reasoning, problem: problem ?? authProblem };
 }
 
 type ClassifierCompletionContext = {
@@ -873,7 +878,9 @@ export const defaultClassifyAction: ClassifyAction = async (
     return {
       decision: "block",
       tier: "none",
-      reason: "No classifier model/API key available; auto mode fails closed.",
+      reason: `No classifier model/API key available${
+        resolution.problem ? ` (${resolution.problem})` : ""
+      }; auto mode fails closed.`,
       reasoning: resolution.reasoning,
     };
   }

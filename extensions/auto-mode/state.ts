@@ -80,14 +80,19 @@ export function statusLine(
   return `AM ${circle} a:${allowed} d:${state.blockedActions}${classifier}`;
 }
 
-/** `config` is the effective config, with any `/automode on|off` choice applied. */
+/**
+ * `config` is the effective config, with any `/automode on|off` choice applied.
+ * `classifier` describes the resolved classifier model; it falls back to the
+ * configured selector when the caller cannot resolve one.
+ */
 export function statusText(
   config: EffectiveConfig,
   state: AutoModeState,
+  classifier = config.classifierModel ?? "current session model",
 ): string {
   return [
     `enabled: ${config.enabled ? "yes" : "no"}`,
-    `classifier: ${config.classifierModel ?? "current session model"}`,
+    `classifier: ${classifier}`,
     `classifier reasoning: ${config.classifierReasoningLevel ?? "server default"}`,
     `checked actions: ${state.checkedActions}`,
     `blocked actions: ${state.blockedActions}`,
