@@ -1,4 +1,6 @@
 import {
+  constants as fsConstants,
+  copyFileSync,
   existsSync,
   linkSync,
   lstatSync,
@@ -61,6 +63,8 @@ export type PrepareGlobalConfigOptions = {
   legacyPath?: string;
   moveFile?: (source: string, destination: string) => void;
   unlinkFile?: (path: string) => void;
+  /** Hard-link primitive for the default move. Overridden in tests. */
+  linkFile?: (source: string, destination: string) => void;
 };
 
 function sameFileIdentity(firstPath: string, secondPath: string): boolean {
@@ -89,12 +93,47 @@ function cleanupPublishedDestination(
   }
 }
 
+/**
+ * Publish a copy of `source` at `destination` without overwriting an existing
+ * file. The copy goes to a temporary file in the destination directory first,
+ * then a hard link (same filesystem, fails if the destination exists) makes it
+ * appear in one step, so a reader never sees a partial config.
+ */
+function copyFileWithoutOverwrite(
+  source: string,
+  destination: string,
+  linkFile: (source: string, destination: string) => void,
+  unlinkFile: (path: string) => void,
+): void {
+  const temporary = `${destination}.${process.pid}.tmp`;
+  try {
+    copyFileSync(source, temporary, fsConstants.COPYFILE_EXCL);
+    linkFile(temporary, destination);
+  } finally {
+    try {
+      unlinkFile(temporary);
+    } catch {
+      // The temporary file is absent when the copy never started.
+    }
+  }
+}
+
 function moveFileWithoutOverwrite(
   source: string,
   destination: string,
+  linkFile: (source: string, destination: string) => void,
   unlinkFile: (path: string) => void,
 ): void {
-  linkSync(source, destination);
+  try {
+    linkFile(source, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
+      throw error;
+    }
+    // The agent directory is on another filesystem, so a hard link is
+    // impossible. Publish a copy instead, then remove the legacy file.
+    copyFileWithoutOverwrite(source, destination, linkFile, unlinkFile);
+  }
   try {
     unlinkFile(source);
   } catch (error) {
@@ -146,6 +185,7 @@ export function prepareGlobalConfig(
   const currentExists = existsSync(currentPath);
   const legacyExists = existsSync(legacyPath);
   const unlinkFile = options.unlinkFile ?? unlinkSync;
+  const linkFile = options.linkFile ?? linkSync;
 
   if (currentExists && legacyExists) {
     if (!sameFileIdentity(currentPath, legacyPath)) {
@@ -181,7 +221,7 @@ export function prepareGlobalConfig(
     mkdirSync(dirname(currentPath), { recursive: true });
     const moveFile = options.moveFile ??
       ((source: string, destination: string) =>
-        moveFileWithoutOverwrite(source, destination, unlinkFile));
+        moveFileWithoutOverwrite(source, destination, linkFile, unlinkFile));
     moveFile(legacyPath, currentPath);
     return {
       status: "migrated",

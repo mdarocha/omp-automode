@@ -34,7 +34,7 @@ The `.pi` locations stay readable as legacy sources.
 At startup the extension applies the ADR-002 selection rules, with the new path as the destination and Pi's global config as the legacy source:
 
 1. If only the new file exists, use it.
-2. If only a legacy file exists, move it to the new path. The legacy candidates are `~/.pi/agent/extensions/pi-automode/config.json` and, if that is absent, the older `~/.pi/agent/automode.json`.
+2. If only a legacy file exists, move it to the new path. The move uses a hard link. When the agent directory is on another filesystem (`EXDEV`), the extension copies the file to a temporary file in the target directory, links it into place without overwriting, and then removes the legacy file. The legacy candidates are `~/.pi/agent/extensions/pi-automode/config.json` and, if that is absent, the older `~/.pi/agent/automode.json`.
 3. If both exist, use the new file, leave the legacy file unchanged, and report a conflict at every startup.
 4. If migration fails, use the legacy file for reads and writes during that session and report the error once.
 5. If neither exists, use the new path for the next write.
