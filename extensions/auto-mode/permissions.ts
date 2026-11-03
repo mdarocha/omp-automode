@@ -12,6 +12,7 @@ import {
   resolveInputPath,
   resolvePathForPolicy,
   resolveToolInputPath,
+  resolveToolInputPaths,
 } from "./paths.ts";
 
 export const MAX_WILDCARD_PATTERN_LENGTH = 4096;
@@ -196,23 +197,30 @@ export function normalizePermissionPathForMatch(
   return platform === "win32" ? path.replace(/\\/g, "/") : path;
 }
 
+/**
+ * Candidate spellings for each path omp may operate on. Spellings of one path
+ * are alternatives; the groups are the distinct paths a `read` selector, query
+ * or path list can address (see {@link resolveToolInputPaths}).
+ */
 function pathArgumentsForMatch(
   toolName: string,
   cwd: string,
   value: string,
   overflowPolicy: WildcardOverflowPolicy,
-): string[] {
-  const resolved = resolveToolInputPath(toolName, cwd, value) ?? value;
-  const canonical = resolvePathForPolicy(resolved);
-  const candidates = canonical
-    ? [canonical, normalizePathForMatch(canonical, cwd)]
-    : [];
-  if (overflowPolicy === "match") {
-    candidates.push(resolved, normalizePathForMatch(resolved, cwd));
-  }
-  return [...new Set(
-    candidates.map((candidate) => normalizePermissionPathForMatch(candidate)),
-  )];
+): string[][] {
+  const groups = resolveToolInputPaths(toolName, cwd, value).map((resolved) => {
+    const canonical = resolvePathForPolicy(resolved);
+    const candidates = canonical
+      ? [canonical, normalizePathForMatch(canonical, cwd)]
+      : [];
+    if (overflowPolicy === "match") {
+      candidates.push(resolved, normalizePathForMatch(resolved, cwd));
+    }
+    return [...new Set(
+      candidates.map((candidate) => normalizePermissionPathForMatch(candidate)),
+    )];
+  });
+  return groups.length > 0 ? groups : [[value]];
 }
 
 function getPrimaryArguments(
@@ -220,9 +228,9 @@ function getPrimaryArguments(
   input: Record<string, unknown>,
   cwd: string,
   overflowPolicy: WildcardOverflowPolicy,
-): string[] {
+): string[][] {
   if (toolName === "bash" && typeof input.command === "string") {
-    return [input.command];
+    return [[input.command]];
   }
   if (
     (toolName === "read" || toolName === "write" || toolName === "edit") &&
@@ -231,7 +239,7 @@ function getPrimaryArguments(
     return pathArgumentsForMatch(toolName, cwd, input.path, overflowPolicy);
   }
   if (toolName === "grep" && typeof input.pattern === "string") {
-    return [input.pattern];
+    return [[input.pattern]];
   }
   if (
     (toolName === "find" || toolName === "ls") &&
@@ -239,7 +247,7 @@ function getPrimaryArguments(
   ) {
     return pathArgumentsForMatch(toolName, cwd, input.path, overflowPolicy);
   }
-  return [JSON.stringify(input)];
+  return [[JSON.stringify(input)]];
 }
 
 function isPermissionPathTool(toolName: string): boolean {
@@ -447,17 +455,23 @@ export function matchesToolPattern(
   const argumentPatterns = isPermissionPathTool(toolName)
     ? permissionPathPatternVariants(pattern.argumentPattern, cwd)
     : [pattern.argumentPattern];
-  const primaryArguments = getPrimaryArguments(
+  const primaryGroups = getPrimaryArguments(
     toolName,
     input,
     cwd,
     overflowPolicy,
   );
-  return argumentPatterns.some((argumentPattern) =>
-    primaryArguments.some((primary) =>
-      matchesWildcardPattern(argumentPattern, primary, overflowPolicy)
-    )
-  );
+  const groupMatches = (group: string[]) =>
+    argumentPatterns.some((argumentPattern) =>
+      group.some((primary) =>
+        matchesWildcardPattern(argumentPattern, primary, overflowPolicy)
+      )
+    );
+  // Deny and ask rules fire when any addressed path matches. Allow rules must
+  // cover every path a selector, query or path list addresses.
+  return overflowPolicy === "match"
+    ? primaryGroups.some(groupMatches)
+    : primaryGroups.every(groupMatches);
 }
 
 /** Return the normalized Bash command that matched a scoped permission rule. */

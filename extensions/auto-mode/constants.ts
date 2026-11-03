@@ -232,6 +232,22 @@ export const PATH_BEARING_TOOLS = new Set([
 ]);
 
 /**
+ * File tools whose `path` omp parses as one or more selector-bearing entries
+ * (`file:5-9`, `db.sqlite:table:key`, `a.zip:member`, `file.json?q=…`, and
+ * `;`/`,`/whitespace-delimited lists) instead of a single literal path.
+ */
+export const SELECTOR_PATH_TOOLS: Record<string, true> = {
+  read: true,
+  grep: true,
+};
+
+/** Separators omp uses to split one `path` string into several entries. */
+export const PATH_LIST_DELIMITERS = /[;,\s]+/;
+
+/** A character after which omp's read grammar may start a selector or query. */
+export const PATH_SELECTOR_BOUNDARY = /[:?]/;
+
+/**
  * Default behavior: read-only tools bypass the classifier entirely (the
  * original auto-mode fast path). When set to true via config, read-only tools
  * are routed through the classifier like any other action, so e.g. reads

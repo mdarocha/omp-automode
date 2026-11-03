@@ -20,14 +20,20 @@ import {
   OMP_DEFAULT_AGENT_DIR,
   OMP_GLOBAL_DATA_DIR_NAME,
   PATH_BEARING_TOOLS,
+  PATH_LIST_DELIMITERS,
+  PATH_SELECTOR_BOUNDARY,
   PI_AGENT_DIR,
   PROFILE_FILES,
+  SELECTOR_PATH_TOOLS,
 } from "./constants.ts";
 
 const PROJECT_CONFIG_DIR = /\/\.(?:pi|omp)\//;
 const PROJECT_CONFIG_EXTENSIONS_DIR = /\/\.(?:pi|omp)\/extensions\//;
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+
+/** omp drops a stray `:` that precedes a path shape (`:/abs`, `:~/x`, `:./x`, `:C:`). */
+const STRAY_LEADING_COLON = /^:(?=[/\\~]|\.\.?[/\\]|[A-Za-z]:)/;
 
 /** Convert Git Bash, MSYS, Cygwin, and WSL drive paths for Windows APIs. */
 function normalizeWindowsShellPath(path: string): string {
@@ -45,6 +51,19 @@ function normalizeWindowsShellPath(path: string): string {
   return `${match[1]?.toUpperCase()}:\\${suffix ?? ""}`;
 }
 
+/**
+ * `file://` URL to a path, the way OMP does it: case-insensitive scheme, and an
+ * invalid URL stays as typed so the tool opens the same path the policy sees.
+ */
+function stripFileUrl(value: string): string {
+  if (!/^file:\/\//i.test(value)) return value;
+  try {
+    return fileURLToPath(value);
+  } catch {
+    return value;
+  }
+}
+
 /** Mirror Pi's path normalization options. */
 function normalizeInputPath(
   value: string,
@@ -53,6 +72,10 @@ function normalizeInputPath(
   let normalized = options.normalizeUnicodeSpaces
     ? value.replace(UNICODE_SPACES, " ")
     : value;
+  // omp tolerates a stray `:` before a path shape; policy must see the same path.
+  if (options.stripAtPrefix && STRAY_LEADING_COLON.test(normalized)) {
+    normalized = normalized.slice(1);
+  }
   if (options.stripAtPrefix && normalized.startsWith("@")) {
     normalized = normalized.slice(1);
   }
@@ -64,8 +87,7 @@ function normalizeInputPath(
   ) {
     return join(HOME, normalized.slice(2));
   }
-  if (/^file:\/\//.test(normalized)) return fileURLToPath(normalized);
-  return normalized;
+  return stripFileUrl(normalized);
 }
 
 export function resolveInputPath(
@@ -110,6 +132,89 @@ export function resolveToolInputPath(
   const resolved = resolveInputPath(cwd, value);
   if (!resolved || toolName !== "read") return resolved;
   return existingReadVariant(resolved);
+}
+
+/** omp trims a path entry and drops one pair of surrounding double quotes. */
+function normalizePathEntry(entry: string): string {
+  const trimmed = entry.trim();
+  return trimmed.length > 1 && trimmed.startsWith('"') && trimmed.endsWith('"')
+    ? trimmed.slice(1, -1)
+    : trimmed;
+}
+
+/** A `path` that is a JSON-encoded string array, which OMP's `grep` reads as a list. */
+export function parseJsonPathArray(value: string): string[] | undefined {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return Array.isArray(parsed) &&
+        parsed.every((entry) => typeof entry === "string")
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The entries OMP's `read` and `grep` split one `path` argument into: the
+ * `;`, `,` and whitespace separated parts, or the elements of a JSON-encoded
+ * array and their parts. The caller still checks the typed value itself.
+ */
+export function splitPathList(value: string): string[] {
+  const elements = parseJsonPathArray(value);
+  const sources = elements
+    ? elements.flatMap((element) => [element, ...element.split(PATH_LIST_DELIMITERS)])
+    : value.split(PATH_LIST_DELIMITERS);
+  return sources.map(normalizePathEntry).filter(Boolean);
+}
+
+/**
+ * Every path omp's `read` and `grep` may operate on for one `path` argument.
+ *
+ * omp does not treat `path` as one literal file name: it peels read selectors
+ * (`:5-9`, `:raw`), addresses members and tables inside archives and
+ * databases (`a.zip:member`, `app.db:table:key`), accepts `?query` suffixes
+ * and splits `;`, `,` or whitespace separated lists. Policy that only saw the
+ * literal string would miss `~/.netrc:1-2` or `README.md;~/.netrc`.
+ *
+ * The literal value always comes first. It is followed by each delimited
+ * entry and every prefix of those entries that ends right before a `:` or `?`.
+ * Callers that deny must match any variant; callers that allow must require
+ * every variant to pass. Prefixes that are not real files are harmless: they
+ * only add candidates.
+ */
+export function inputPathVariants(toolName: string, value: string): string[] {
+  if (SELECTOR_PATH_TOOLS[toolName] !== true) return [value];
+  const variants = new Set<string>([value]);
+  for (const typed of [normalizePathEntry(value), ...splitPathList(value)]) {
+    // OMP converts a `file://` URL before it peels selectors from the path.
+    const entry = stripFileUrl(typed);
+    variants.add(typed);
+    variants.add(entry);
+    for (let index = 1; index < entry.length; index += 1) {
+      if (PATH_SELECTOR_BOUNDARY.test(entry.charAt(index))) {
+        variants.add(entry.slice(0, index));
+      }
+    }
+  }
+  return [...variants];
+}
+
+/** Resolve every {@link inputPathVariants} entry the way the named tool would. */
+export function resolveToolInputPaths(
+  toolName: string,
+  cwd: string,
+  value: unknown,
+): string[] {
+  if (typeof value !== "string") return [];
+  const resolved = new Set<string>();
+  for (const variant of inputPathVariants(toolName, value)) {
+    const path = resolveToolInputPath(toolName, cwd, variant);
+    if (path !== undefined) resolved.add(path);
+  }
+  return [...resolved];
 }
 
 /** The effective target path of a file tool, including Pi's `.` defaults. */

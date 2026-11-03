@@ -88,6 +88,7 @@ import {
   registerOmpAgentDir,
   resolvePathForPolicy,
   resolveToolInputPath,
+  resolveToolInputPaths,
 } from "./paths.ts";
 import {
   claimsForToolCall,
@@ -940,63 +941,76 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       ) {
         const inputPath = extractInputPath(event.toolName, input);
         if (inputPath !== undefined) {
-          const resolved =
-            resolveToolInputPath(event.toolName, ctx.cwd, inputPath) ??
-            inputPath;
-          const policyPath = resolvePathForPolicy(resolved) ?? resolved;
-          const denied =
-            cfg.deniedPaths.length > 0 &&
-            (matchesDeniedPath(resolved, cfg.deniedPaths) ||
-              matchesDeniedPath(policyPath, cfg.deniedPaths));
-          if (denied) {
-            return block(ctx, {
-              timestamp: Date.now(),
-              toolName: event.toolName,
-              reason: `Path denied by policy: ${policyPath}`,
-              action: summary,
-              kind: "deterministic-path-deny",
-            }, logCtx);
-          }
-          let recursiveSearch =
-            event.toolName === "grep" || event.toolName === "find";
-          if (recursiveSearch) {
-            try {
-              recursiveSearch = statSync(policyPath).isDirectory();
-            } catch {
-              // A missing search root will fail in the tool. Treat it as a
-              // directory here so a denied scope cannot fail open in a race.
+          // omp's read and grep address more than the literal string
+          // (selectors, queries, path lists), so every path the call can
+          // reach is checked.
+          const targets = resolveToolInputPaths(
+            event.toolName,
+            ctx.cwd,
+            inputPath,
+          ).map((resolved) => ({
+            resolved,
+            policyPath: resolvePathForPolicy(resolved) ?? resolved,
+          }));
+          for (const { resolved, policyPath } of targets) {
+            const denied =
+              cfg.deniedPaths.length > 0 &&
+              (matchesDeniedPath(resolved, cfg.deniedPaths) ||
+                matchesDeniedPath(policyPath, cfg.deniedPaths));
+            if (denied) {
+              return block(ctx, {
+                timestamp: Date.now(),
+                toolName: event.toolName,
+                reason: `Path denied by policy: ${policyPath}`,
+                action: summary,
+                kind: "deterministic-path-deny",
+              }, logCtx);
             }
-          }
-          const deniedSearchScope =
-            recursiveSearch &&
-            cfg.deniedPaths.length > 0 &&
-            (recursiveSearchMayReachDeniedPath(resolved, cfg.deniedPaths) ||
-              recursiveSearchMayReachDeniedPath(
-                policyPath,
-                cfg.deniedPaths,
-              ));
-          if (deniedSearchScope) {
-            return block(ctx, {
-              timestamp: Date.now(),
-              toolName: event.toolName,
-              reason: `Search scope can contain a path denied by policy: ${policyPath}`,
-              action: summary,
-              kind: "deterministic-path-deny",
-            }, logCtx);
+            let recursiveSearch =
+              event.toolName === "grep" || event.toolName === "find";
+            if (recursiveSearch) {
+              try {
+                recursiveSearch = statSync(policyPath).isDirectory();
+              } catch {
+                // A missing search root will fail in the tool. Treat it as a
+                // directory here so a denied scope cannot fail open in a race.
+              }
+            }
+            const deniedSearchScope =
+              recursiveSearch &&
+              cfg.deniedPaths.length > 0 &&
+              (recursiveSearchMayReachDeniedPath(resolved, cfg.deniedPaths) ||
+                recursiveSearchMayReachDeniedPath(
+                  policyPath,
+                  cfg.deniedPaths,
+                ));
+            if (deniedSearchScope) {
+              return block(ctx, {
+                timestamp: Date.now(),
+                toolName: event.toolName,
+                reason: `Search scope can contain a path denied by policy: ${policyPath}`,
+                action: summary,
+                kind: "deterministic-path-deny",
+              }, logCtx);
+            }
           }
           if (cfg.allowInsideWorkingDirectory) {
             const policyCwd = resolvePathForPolicy(ctx.cwd) ?? ctx.cwd;
-            if (isInside(policyPath, policyCwd)) {
+            if (targets.every(({ policyPath }) => isInside(policyPath, policyCwd))) {
               // Protected in-tree writes and accepted ask rules must still
               // reach the classifier. They cannot use the inside-CWD tier.
               const protectedWrite =
                 (event.toolName === "write" || event.toolName === "edit") &&
-                isProtectedPath(policyPath, policyCwd, cfg.protectedPaths);
+                targets.some(({ policyPath }) =>
+                  isProtectedPath(policyPath, policyCwd, cfg.protectedPaths)
+                );
               if (!askRequiresClassifier && !protectedWrite) {
                 return allow(
                   ctx,
                   "inside-working-directory",
-                  `Path inside working directory: ${policyPath}`,
+                  `Path inside working directory: ${
+                    targets.map(({ policyPath }) => policyPath).join(", ")
+                  }`,
                   event.toolName,
                   summary,
                   logCtx,
