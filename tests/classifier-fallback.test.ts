@@ -5,6 +5,7 @@ import {
 	DEFAULT_RATE_LIMIT_COOLDOWN_MS,
 	MAX_CLASSIFIER_CANDIDATES,
 	MAX_COOLDOWN_MS,
+	TIMEOUT_COOLDOWN_MS,
 	TRANSIENT_RETRY_DELAY_MS,
 	classifyWithFallback,
 	type ClassifierFailure,
@@ -126,16 +127,53 @@ test("a rate limit without a hint uses the default cooldown; a huge hint is capp
 	assert.equal(cooldowns.active(B1), undefined);
 });
 
-test("only rate limits trip the circuit breaker", () => {
+test("only rate limits and repeated timeouts trip the circuit breaker", () => {
 	const cooldowns = new ClassifierCooldowns(() => 0);
 	for (const kind of ["timeout", "server", "auth", "format", "aborted"] as const) {
 		cooldowns.trip(A1, { kind, message: kind });
 		assert.equal(cooldowns.active(A1), undefined, kind);
 	}
+	cooldowns.clear();
 	cooldowns.trip(A1, { kind: "rate_limit", message: "429" });
 	assert.ok(cooldowns.active(A1));
 	cooldowns.clear();
 	assert.equal(cooldowns.active(A1), undefined);
+});
+
+test("two consecutive timeouts bench that model for a minute; a success resets the streak", () => {
+	let clock = 0;
+	const cooldowns = new ClassifierCooldowns(() => clock);
+	const timeout: ClassifierFailure = { kind: "timeout", message: "timed out" };
+	cooldowns.trip(A1, timeout);
+	cooldowns.recordSuccess(A1);
+	cooldowns.trip(A1, timeout);
+	assert.equal(cooldowns.active(A1), undefined, "a success between timeouts resets the streak");
+	cooldowns.trip(A1, timeout);
+	assert.equal(cooldowns.active(A1)?.failure.kind, "timeout");
+	assert.equal(cooldowns.active(A1)?.retryInMs, TIMEOUT_COOLDOWN_MS);
+	assert.equal(cooldowns.active(A2), undefined, "other models of the provider keep working");
+	clock = TIMEOUT_COOLDOWN_MS;
+	assert.equal(cooldowns.active(A1), undefined);
+	cooldowns.trip(A1, timeout);
+	assert.equal(cooldowns.active(A1), undefined, "the streak starts over after the cooldown");
+});
+
+test("a model that timed out twice is skipped on later calls without a request", async () => {
+	const h = harness({ "anthropic/haiku": [TIMED_OUT, TIMED_OUT], "github-copilot/haiku": [ALLOW, ALLOW] });
+	await classifyWithFallback([A1, B1], (c) => h.run(c), h.options);
+	assert.deepEqual(h.calls, ["anthropic/haiku", "anthropic/haiku", "github-copilot/haiku"]);
+	await classifyWithFallback([A1, B1], (c) => h.run(c), h.options);
+	assert.deepEqual(h.calls.slice(3), ["github-copilot/haiku"]);
+	h.advance(TIMEOUT_COOLDOWN_MS);
+	assert.equal(h.cooldowns.active(A1), undefined);
+});
+
+test("the retry is skipped when the first timeout already opens the circuit", async () => {
+	const h = harness({ "anthropic/haiku": [TIMED_OUT], "github-copilot/haiku": [ALLOW] });
+	h.cooldowns.trip(A1, { kind: "timeout", message: "earlier" });
+	await classifyWithFallback([A1, B1], (c) => h.run(c), h.options);
+	assert.deepEqual(h.calls, ["anthropic/haiku", "github-copilot/haiku"]);
+	assert.deepEqual(h.sleeps, []);
 });
 
 test("a cooldown covers every model of the provider", async () => {

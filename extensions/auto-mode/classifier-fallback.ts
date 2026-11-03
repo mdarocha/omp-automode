@@ -19,6 +19,10 @@ export const TRANSIENT_RETRY_DELAY_MS = { min: 250, max: 750 } as const;
 export const MAX_CLASSIFIER_CANDIDATES = 4;
 /** No further attempt starts once a decision has used this many request timeouts. */
 export const DECISION_BUDGET_TIMEOUTS = 3;
+/** Consecutive timeouts of one model (an attempt and its retry count as two) that bench it. */
+export const TIMEOUT_STREAK_THRESHOLD = 2;
+/** How long a model that timed out repeatedly is skipped. */
+export const TIMEOUT_COOLDOWN_MS = 60_000;
 
 /** Failures worth one more try on the same candidate. */
 const TRANSIENT_KINDS: Partial<Record<ClassifierErrorKind, true>> = {
@@ -35,17 +39,24 @@ const PROVIDER_KINDS: Partial<Record<ClassifierErrorKind, true>> = {
 
 export type FallbackCandidate = { provider: string; id: string };
 
+function modelKey(candidate: FallbackCandidate): string {
+  return `${candidate.provider}/${candidate.id}`;
+}
+
 type Cooldown = { until: number; retryAt?: number; failure: ClassifierFailure };
 
 /**
- * Circuit breaker over providers. A rate limit applies to the whole account,
- * so one throttled model keeps every model of that provider out of the walk
- * until the cooldown ends. Other failures never trip it: timeouts and server
- * errors get a retry and a fallback and often clear on the next request, and
- * credential problems are fixed by the user, who should not have to wait.
+ * Circuit breaker. A rate limit applies to the whole account, so one throttled
+ * model keeps every model of that provider out of the walk until the cooldown
+ * ends. Consecutive timeouts bench the one slow model for a short while, so it
+ * does not cost a full timeout, and its retry, on every call. A success resets
+ * the streak. Server errors and credential problems never trip it: the first
+ * clears on a retry or another candidate, and the second is fixed by the user,
+ * who should not have to wait.
  */
 export class ClassifierCooldowns {
   readonly #entries = new Map<string, Cooldown>();
+  readonly #timeouts = new Map<string, number>();
   readonly #now: () => number;
 
   constructor(now: () => number = Date.now) {
@@ -53,41 +64,62 @@ export class ClassifierCooldowns {
   }
 
   trip(candidate: FallbackCandidate, failure: ClassifierFailure): void {
-    if (failure.kind !== "rate_limit") {
-      return;
-    }
     const now = this.#now();
-    const hint = failure.retryAfterMs;
-    this.#entries.set(candidate.provider, {
-      until: now + Math.min(hint ?? DEFAULT_RATE_LIMIT_COOLDOWN_MS, MAX_COOLDOWN_MS),
-      ...(hint === undefined ? {} : { retryAt: now + hint }),
-      failure,
-    });
+    if (failure.kind === "rate_limit") {
+      const hint = failure.retryAfterMs;
+      this.#entries.set(candidate.provider, {
+        until: now + Math.min(hint ?? DEFAULT_RATE_LIMIT_COOLDOWN_MS, MAX_COOLDOWN_MS),
+        ...(hint === undefined ? {} : { retryAt: now + hint }),
+        failure,
+      });
+    } else if (failure.kind === "timeout") {
+      const model = modelKey(candidate);
+      const streak = (this.#timeouts.get(model) ?? 0) + 1;
+      if (streak < TIMEOUT_STREAK_THRESHOLD) {
+        this.#timeouts.set(model, streak);
+        return;
+      }
+      this.#timeouts.delete(model);
+      this.#entries.set(model, {
+        until: now + TIMEOUT_COOLDOWN_MS,
+        retryAt: now + TIMEOUT_COOLDOWN_MS,
+        failure,
+      });
+    }
   }
 
-  /** The failure that benched this candidate's provider, with the provider's own estimate of when it recovers. */
+  /** A decision from this candidate ends its timeout streak. */
+  recordSuccess(candidate: FallbackCandidate): void {
+    this.#timeouts.delete(modelKey(candidate));
+  }
+
+  /** The failure that benched this candidate (or its provider), with the estimate of when it recovers. */
   active(
     candidate: FallbackCandidate,
   ): { failure: ClassifierFailure; retryInMs?: number } | undefined {
-    const entry = this.#entries.get(candidate.provider);
-    if (!entry) {
-      return undefined;
-    }
     const now = this.#now();
-    if (now >= entry.until) {
-      this.#entries.delete(candidate.provider);
-      return undefined;
+    for (const key of [candidate.provider, modelKey(candidate)]) {
+      const entry = this.#entries.get(key);
+      if (!entry) {
+        continue;
+      }
+      if (now >= entry.until) {
+        this.#entries.delete(key);
+        continue;
+      }
+      return {
+        failure: entry.failure,
+        ...(entry.retryAt === undefined
+          ? {}
+          : { retryInMs: Math.max(0, entry.retryAt - now) }),
+      };
     }
-    return {
-      failure: entry.failure,
-      ...(entry.retryAt === undefined
-        ? {}
-        : { retryInMs: Math.max(0, entry.retryAt - now) }),
-    };
+    return undefined;
   }
 
   clear(): void {
     this.#entries.clear();
+    this.#timeouts.clear();
   }
 }
 
@@ -239,6 +271,7 @@ export async function classifyWithFallback<C extends FallbackCandidate>(
         attempts.push(...stampAttempts(result.io.attempts, model, failure));
       }
       if (!failure) {
+        cooldowns.recordSuccess(candidate!);
         return {
           ...result,
           ...(result.io === undefined
@@ -251,9 +284,10 @@ export async function classifyWithFallback<C extends FallbackCandidate>(
         retryInMs.push(undefined);
         return unavailable(true);
       }
+      cooldowns.trip(candidate!, failure);
       if (
         attempt === 0 && TRANSIENT_KINDS[failure.kind] && withinBudget() &&
-        !options.signal?.aborted
+        !options.signal?.aborted && !cooldowns.active(candidate!)
       ) {
         const { min, max } = TRANSIENT_RETRY_DELAY_MS;
         await sleep(min + random() * (max - min), options.signal);
@@ -264,7 +298,6 @@ export async function classifyWithFallback<C extends FallbackCandidate>(
 
     failures.push(failure);
     retryInMs.push(failure.kind === "rate_limit" ? failure.retryAfterMs : undefined);
-    cooldowns.trip(candidate!, failure);
     if (PROVIDER_KINDS[failure.kind]) {
       failedProviders.add(candidate!.provider);
     }
