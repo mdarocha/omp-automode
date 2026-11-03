@@ -58,6 +58,14 @@ function stripFileUrl(value: string): string {
   }
 }
 
+/** Drop the prefixes OMP tools tolerate before a path: a stray `:` and one `@`. */
+export function stripToolPathPrefixes(value: string): string {
+  const withoutColon = STRAY_LEADING_COLON.test(value)
+    ? value.slice(1)
+    : value;
+  return withoutColon.startsWith("@") ? withoutColon.slice(1) : withoutColon;
+}
+
 /** Mirror Pi's path normalization options. */
 function normalizeInputPath(
   value: string,
@@ -66,13 +74,7 @@ function normalizeInputPath(
   let normalized = options.normalizeUnicodeSpaces
     ? value.replace(UNICODE_SPACES, " ")
     : value;
-  // omp tolerates a stray `:` before a path shape; policy must see the same path.
-  if (options.stripAtPrefix && STRAY_LEADING_COLON.test(normalized)) {
-    normalized = normalized.slice(1);
-  }
-  if (options.stripAtPrefix && normalized.startsWith("@")) {
-    normalized = normalized.slice(1);
-  }
+  if (options.stripAtPrefix) normalized = stripToolPathPrefixes(normalized);
   normalized = normalizeWindowsShellPath(normalized);
   if (normalized === "~") return HOME;
   if (

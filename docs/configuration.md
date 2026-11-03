@@ -58,6 +58,8 @@ OMP's `read` and `grep` parse `path`. They peel line and `:raw` selectors (`~/.n
 
 If a recursive `grep` or `find` scope can contain a denied path, pi-automode blocks the call. A broad pattern such as `*.env` blocks these tools for every directory scope.
 
+A `scheme://` path is not a filesystem path. Reads of built-in OMP schemes (`skill`, `local`, `artifact`, `omp`, `history`, `issue`, `pr`, `mr`, `agent`, `proc`, `mcp`, `xd`) are allowed locally. Reads of any other scheme, including `https://` pages and `ssh://` hosts, go to the classifier even when `classifyReadOnlyTools` is `false`. A `write` to `xd://<tool>` is allowed because OMP runs the named tool as a nested call that is judged on its own. A write to `local://` is session scratch and follows `allowInsideWorkingDirectory`. Writes to `proc://`, `agent://`, `ssh://`, and other schemes go to the classifier. A `deniedPaths` pattern is matched against the URL as typed, so `*.env` blocks `skill://notes/.env`.
+
 A matching path blocks the call without classifier review or an override. The list applies only to file tools. The classifier governs `bash` path access. Both keys use the normal scalar and array precedence.
 
 `allowInsideWorkingDirectory` uses scalar precedence: global, then project-local, then `PI_AUTOMODE_SETTINGS_JSON`. `deniedPaths` entries accumulate across these configuration sources.
@@ -146,7 +148,7 @@ Permission patterns use Pi tool names. Examples include `bash(...)`, `write(...)
 
 Use this tier for a narrow command such as `bash(git status*)`. You can also use it for a side-effect-free extension or MCP tool.
 
-The matcher understands primary arguments for `bash`, the file tools, and `grep`. For file tools, it uses the resolved `input.path`. For `grep`, it uses `input.pattern`.
+The matcher understands primary arguments for `bash`, the file tools, and `grep`. For file tools, it uses the resolved `input.path`. A `scheme://` entry matches as typed, so `read(https://docs.example.com/*)` allows one site. For `grep`, it uses `input.pattern`.
 
 For `bash`, pi-automode parses `input.command` with `unbash`. Deny and ask rules inspect each executable command in the Bash syntax tree. This includes pipelines, logical chains, compound commands, substitutions, and literal scripts passed to `bash -c`, `sh -c`, or `eval`. The analysis also follows these literal shell scripts through transparent `command`, `exec`, and `env` dispatch.
 

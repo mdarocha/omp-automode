@@ -216,6 +216,39 @@ export const PATH_LIST_DELIMITERS = /[;,\s]+/;
 /** A character after which omp's read grammar may start a selector or query. */
 export const PATH_SELECTOR_BOUNDARY = /[:?]/;
 
+/** `scheme://` prefix of an internal OMP URL or web URL. Two or more characters, so `C://` stays a drive path. */
+export const URL_SCHEME_PREFIX = /^([a-z][a-z0-9+.-]+):\/\//i;
+
+/** What OMP's `read` fetches as a web page: `http(s):/`, `http(s)://`, and bare `www.` hosts. */
+export const WEB_URL_PREFIX = /^(https?):\/\/?|^www\./i;
+
+/** OMP's single-slash alias for the `local://` scratch root. */
+export const LOCAL_SINGLE_SLASH_PREFIX = /^local:\/(?!\/)/i;
+
+/** `xd://<device>`: a bare tool-device name with no path, query, or fragment. */
+export const XD_DEVICE_URL = /^xd:\/\/([^/?#]+)$/i;
+
+/**
+ * Internal OMP schemes whose reads only return built-in or session-local
+ * documents (docs, skills, artifacts, history, job output, forge issues).
+ * Any other scheme, including `http(s)`, `ssh`, `cfg`, and server-defined MCP
+ * resource schemes, reaches the classifier.
+ */
+export const READ_ONLY_URL_SCHEMES: Record<string, true> = {
+  agent: true,
+  artifact: true,
+  history: true,
+  issue: true,
+  local: true,
+  mcp: true,
+  mr: true,
+  omp: true,
+  pr: true,
+  proc: true,
+  skill: true,
+  xd: true,
+};
+
 /**
  * Default behavior: read-only tools bypass the classifier entirely (the
  * original auto-mode fast path). When set to true via config, read-only tools

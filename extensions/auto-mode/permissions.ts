@@ -14,6 +14,7 @@ import {
   resolveToolInputPath,
   resolveToolInputPaths,
 } from "./paths.ts";
+import { gateUrlSchemePath } from "./url-schemes.ts";
 
 export const MAX_WILDCARD_PATTERN_LENGTH = 4096;
 export const MAX_WILDCARD_INPUT_LENGTH = 1024 * 1024;
@@ -200,7 +201,8 @@ export function normalizePermissionPathForMatch(
 /**
  * Candidate spellings for each path omp may operate on. Spellings of one path
  * are alternatives; the groups are the distinct paths a `read` selector, query
- * or path list can address (see {@link resolveToolInputPaths}).
+ * or path list can address (see {@link resolveToolInputPaths}). A `scheme://`
+ * entry is not a filesystem path, so it matches as typed.
  */
 function pathArgumentsForMatch(
   toolName: string,
@@ -208,7 +210,16 @@ function pathArgumentsForMatch(
   value: string,
   overflowPolicy: WildcardOverflowPolicy,
 ): string[][] {
-  const groups = resolveToolInputPaths(toolName, cwd, value).map((resolved) => {
+  const gate = gateUrlSchemePath(toolName, value);
+  const urlGroups = gate?.decisions.map(({ entry }) => [entry]) ?? [];
+  const resolvedPaths = gate && gate.pathEntries.length === 0
+    ? []
+    : resolveToolInputPaths(
+      toolName,
+      cwd,
+      gate ? gate.pathEntries.join(";") : value,
+    );
+  const pathGroups = resolvedPaths.map((resolved) => {
     const canonical = resolvePathForPolicy(resolved);
     const candidates = canonical
       ? [canonical, normalizePathForMatch(canonical, cwd)]
@@ -220,6 +231,7 @@ function pathArgumentsForMatch(
       candidates.map((candidate) => normalizePermissionPathForMatch(candidate)),
     )];
   });
+  const groups = [...urlGroups, ...pathGroups];
   return groups.length > 0 ? groups : [[value]];
 }
 
