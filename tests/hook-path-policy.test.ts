@@ -833,8 +833,9 @@ test("writes through symlink loops still go to the classifier", async () => {
 test("write through a symlink to an in-tree safety-control file is hard-denied before classification", async () => {
 	const project = mkdtempSync(join(os.tmpdir(), "pi-automode-project-"));
 	try {
-		const safetyControl = join(project, "auto-mode-policy.ts");
-		writeFileSync(safetyControl, "export const enabled = true;\n");
+		mkdirSync(join(project, ".pi"));
+		const safetyControl = join(project, ".pi/automode.local.json");
+		writeFileSync(safetyControl, "{}\n");
 		symlinkSync(safetyControl, join(project, "ordinary.ts"));
 		const harness = await setupHookTest({ ctx: createFakeCtx([], { cwd: project }) });
 
