@@ -357,7 +357,7 @@ test("tool_call logs effective explicit reasoning when classifier authentication
 			readFileSync(join(dir, "sess-pi-automode.jsonl"), "utf8").trim(),
 		);
 		assert.equal(entry.type, "decision");
-		assert.equal(entry.kind, "classifier");
+		assert.equal(entry.kind, "classifier-unavailable");
 		assert.deepEqual(entry.reasoning, {
 			mode: "explicit",
 			requestedLevel: "max",

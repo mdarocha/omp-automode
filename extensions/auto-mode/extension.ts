@@ -17,6 +17,7 @@ import {
   describeClassifierModel,
   resolveClassifierModels,
 } from "./classifier-models.ts";
+import { classifierCooldowns } from "./classifier-fallback.ts";
 import { analyzeBash, type BashAnalysis } from "./bash.ts";
 import {
   AUTO_MODE_GUIDANCE,
@@ -96,6 +97,8 @@ import type {
 import { safeJson, truncateMiddle } from "./utils.ts";
 
 const INSPECT_TOOL = "automode_inspect";
+/** A reason may already end its sentence; the unavailable notice adds its own. */
+const TRAILING_PERIODS = /\.+$/;
 const INSPECTION_ACTIONS = ["status", "config", "defaults", "denials"] as const;
 type InspectionAction = (typeof INSPECTION_ACTIONS)[number];
 
@@ -344,8 +347,11 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       };
     }
 
-    function blockedToolReason(reason: string): string {
-      return `[pi-automode] Action blocked; the tool did not run. ${reason} Do not claim success, rely on effects from this call, or attempt an equivalent workaround. Report the block to the user before continuing with dependent work. Independent work can continue.`;
+    function blockedToolReason(denial: DenialRecord): string {
+      const cause = denial.kind === "classifier-unavailable"
+        ? `${denial.reason.replace(TRAILING_PERIODS, "")}. This is not a policy denial: auto mode could not review the action.`
+        : denial.reason;
+      return `[pi-automode] Action blocked; the tool did not run. ${cause} Do not claim success, rely on effects from this call, or attempt an equivalent workaround. Report the block to the user before continuing with dependent work. Independent work can continue.`;
     }
 
     function block(
@@ -383,7 +389,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       }
       return {
         block: true,
-        reason: blockedToolReason(denial.reason),
+        reason: blockedToolReason(denial),
       };
     }
 
@@ -798,6 +804,18 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         );
       }
 
+      if (decision.failure) {
+        // The classifier could not decide: not a policy denial, so the
+        // classifier-denied counter stays unchanged.
+        return block(ctx, {
+          timestamp: Date.now(),
+          toolName: event.toolName,
+          reason: decision.reason,
+          action: summary,
+          kind: "classifier-unavailable",
+        }, logCtx);
+      }
+
       state.classifierDenied += 1;
       return block(ctx, {
         timestamp: Date.now(),
@@ -866,6 +884,8 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         return;
       }
       if (command === "reload") {
+        // Also forgets rate-limit cooldowns, so the next action probes providers again.
+        classifierCooldowns.clear();
         loadResult = loadConfigWithDiagnostics(
           ctx.cwd,
           projectIsTrusted(ctx),

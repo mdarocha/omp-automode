@@ -7,6 +7,8 @@
  */
 
 export * from "./auto-mode/classifier.ts";
+export * from "./auto-mode/classifier-errors.ts";
+export * from "./auto-mode/classifier-fallback.ts";
 export * from "./auto-mode/classifier-models.ts";
 export * from "./auto-mode/bash.ts";
 export * from "./auto-mode/config.ts";
