@@ -190,6 +190,9 @@ export const PROFILE_FILES = new Set([
 
 export const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
+/** OMP's code-execution tool; its Python/JavaScript cells are scanned for embedded shell commands. */
+export const EVAL_TOOL = "eval";
+
 /** File tools that expose a target path via `input.path` (for path gating). */
 export const PATH_BEARING_TOOLS = new Set([
   "read",

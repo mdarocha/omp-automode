@@ -173,6 +173,8 @@ Pi-automode parses Bash structure with `unbash` before permission and determinis
 
 Deterministic path checks include possible directories reached by `cd` and resolve symlink aliases to shell profiles and SSH authorized keys. If a directory change cannot be resolved safely, relative deletion, permission mutation, and redirects that write a relative path fail closed. Descriptor duplication such as `2>&1`, here-documents, and input redirects open no file for writing and do not trigger this. Unquoted pathname expansion in an executable name and decoded NUL characters in shell words also block the call, even when a Bash allow rule matches.
 
+OMP's `eval` tool gets the same checks for the shell commands in its code. Pi-automode extracts literal commands from Python (`subprocess.*`, `os.system`, `os.popen`, IPython `!cmd`) and JavaScript (`child_process`, Bun's `$` and `Bun.spawn`) and runs each through `bash(...)` permission rules and the hard-deny checks. `permissions.*` rules also accept `eval(...)` patterns, optionally scoped as `eval(py: ...)` or `eval(js: ...)`. Code the scanner cannot read, such as computed commands, `getattr(subprocess, ...)`, or `exec`, is opaque: it never matches `permissions.allow` and always gets the detailed classifier review. The scan is lexical and best-effort. It is not a sandbox and cannot see aliases from earlier `eval` calls or file operations. See [Eval tool](docs/configuration.md#eval-tool).
+
 ## Examples
 
 - `examples/automode.local.json`: copy to `.pi/automode.local.json` in a project and edit the domains, buckets, and source-control org.

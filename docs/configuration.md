@@ -144,7 +144,7 @@ Permission patterns use Pi tool names. Examples include `bash(...)`, `write(...)
 
 Use this tier for a narrow command such as `bash(git status*)`. You can also use it for a side-effect-free extension or MCP tool.
 
-The matcher understands primary arguments for `bash`, the file tools, and `grep`. For file tools, it uses the resolved `input.path`. For `grep`, it uses `input.pattern`.
+The matcher understands primary arguments for `bash`, `eval` (the cell `code`; see [Eval tool](#eval-tool)), the file tools, and `grep`. For file tools, it uses the resolved `input.path`. For `grep`, it uses `input.pattern`.
 
 For `bash`, pi-automode parses `input.command` with `unbash`. Deny and ask rules inspect each executable command in the Bash syntax tree. This includes pipelines, logical chains, compound commands, substitutions, and literal scripts passed to `bash -c`, `sh -c`, or `eval`. The analysis also follows these literal shell scripts through transparent `command`, `exec`, and `env` dispatch.
 
@@ -173,6 +173,59 @@ For other allow matching, an input can contain at most 1,048,576 UTF-16 code uni
 `write` and `edit` calls whose resolved target is a protected path are never covered by `permissions.allow`. This includes protected targets reached through symlink aliases.
 
 See [Permission recipes](permission-recipes.md) for narrow examples of Bash permissions, directory changes, command chains, redirects, and classifier guidance.
+
+## Eval tool
+
+OMP's `eval` tool runs Python or JavaScript cells. Its `code` can start shell commands that a `bash(...)` rule never sees, so pi-automode matches `eval` patterns against the code, scans the code for shell commands, and treats code it cannot fully read as opaque.
+
+### Patterns
+
+`permissions.deny`, `permissions.ask`, and `permissions.allow` accept `eval(...)`. The argument is a wildcard pattern matched against the cell's `code`, with the same `*` semantics as other patterns. `*` also matches newlines, so `eval(*shutil.rmtree*)` matches anywhere in the cell.
+
+Prefix the pattern with `py:` or `js:` to limit it to one language: `eval(py: *requests.post*)`. `python:` and `javascript:` work too. A pattern without a prefix applies to both languages. To match code that literally starts with `py:`, write `eval(*py:*)`. If the call has no recognizable `language`, deny and ask rules still apply to a scoped pattern, and allow rules do not. `eval(py:)` with nothing after the prefix is malformed and fails closed like other malformed patterns.
+
+### Embedded shell commands
+
+Pi-automode extracts shell commands whose text is a literal from:
+
+- Python: `subprocess.run`, `call`, `check_call`, `check_output`, `Popen`, `getoutput`, `getstatusoutput`; `os.system`, `os.popen`; `asyncio.create_subprocess_shell` and `create_subprocess_exec`; IPython `!cmd` lines, `var = !cmd`, and `%%bash` cells.
+- JavaScript: `child_process` `exec`, `execSync`, `execFile`, `execFileSync`, `spawn`, `spawnSync` (through `require`, `import`, `import()`, destructuring, or renamed imports); Bun's `$` template without `${}` interpolation; `Bun.spawn` and `Bun.spawnSync` with a literal array or `cmd`.
+
+A string argument is shell text. An argument list becomes a command line with each word quoted. Glob characters and a leading `~` stay unquoted, so `['rm', '-rf', '/*']` is analyzed as `rm -rf /*`. That over-approximates what `exec` runs, which can only make deny rules and hard-deny checks stricter. A literal `cwd` becomes a leading `cd`. Literal strings joined with `+` (or written side by side in Python) are folded into one string.
+
+Each extracted command goes through the same checks as a `bash` call: `bash(...)` deny and ask rules match it, and deterministic hard-deny checks apply to it. Every command in a cell must pass, and the block reason names the embedded command. A `bash(rm -rf /*)` deny rule therefore blocks `subprocess.run(['rm', '-rf', '/*'])` in an `eval` cell.
+
+An `eval` allow rule also needs every extracted command to be covered by `bash(...)` allow rules. `permissions.allow: ["eval"]` alone does not allow `os.system('git status')`.
+
+### Opaque evals
+
+When the scanner cannot be sure it saw every command, the eval is opaque. Common causes:
+
+- an f-string with interpolation, a variable, or concatenation with a variable as the command; `shell=True` with a computed command;
+- `getattr(subprocess, ...)`, `__import__`, `importlib`, `exec`, `eval`, `compile`, `ctypes`, `pty`, `os.exec*`, `os.spawn*`, `os.fork`;
+- aliasing `subprocess` or `os`, or `from subprocess import ...`;
+- `env=` or `executable=` options on a subprocess call;
+- an IPython magic other than `%pwd`, `%ls`, `%env`, `%set_env`, `%who`, `%whos`, `%reset`, and `%load`, `%run`, or `%pip` cells;
+- JavaScript `eval`, `Function`, `vm`, `process.binding`, computed member access, or a `child_process` function used as a value;
+- code the scanner cannot tokenize, and extracted strings that are not valid shell.
+
+An opaque eval never matches `permissions.allow`, even a bare `eval` rule. It skips the classifier's fast 0/1 stage, so the detailed review always runs. The classifier also receives the reasons, so it reads the code itself.
+
+### `tool.*` calls
+
+Code that calls `tool.bash(...)` or another `tool.*` function from inside `eval` reaches the `tool_call` hook as a normal call under the canonical tool name. Pi-automode does not parse those calls out of the eval code, so each one runs through the normal rules once.
+
+### Limits
+
+The scan is a best-effort lexical pass. It is not an interpreter and not a sandbox. It cannot see:
+
+- values computed at run time;
+- aliases defined in an earlier `eval` call. The Python and JavaScript sessions persist between calls, so `run = subprocess.run` in one call and `run(['rm', '-rf', '/'])` in the next hides the command from the scan. The first call is opaque and the second is not;
+- code reached through files, installed packages, `%run`, or `%load`;
+- file operations such as `shutil.rmtree`, `os.remove`, `pathlib.Path.unlink`, `open(..., 'w')`, or `fs.rmSync`. These are not modeled as shell commands and reach the classifier like any other action;
+- network or other side effects that need no shell.
+
+Obfuscation that defeats the lexer can still hide a command. The classifier remains the backstop for everything a deterministic rule does not block.
 
 ## TypeSafe Jev
 
