@@ -1,21 +1,64 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import {
+  agentMessageFromCustomEntry,
+  agentMessageFromUserText,
+  agentMessageFromWaitDetails,
+  agentMessageLabel,
+  backgroundJobResult,
+  parentAgentId,
+} from "./agent-messages.ts";
+import {
+  CHARS_PER_APPROX_TOKEN,
+  DEFAULT_INCLUDE_TOOL_RESULTS,
+  DEFAULT_MAX_TOOL_RESULT_TRANSCRIPT_ENTRIES,
+  DEFAULT_MAX_TOOL_RESULT_TRANSCRIPT_TOKENS,
+  DEFAULT_MAX_TOOL_TRANSCRIPT_CALLS,
+  DEFAULT_MAX_USER_TRANSCRIPT_MESSAGES,
+  READ_ONLY_TOOLS,
+} from "./constants.ts";
+import {
+  exitCodeFromDetails,
+  renderToolResult,
+  summarizeToolCall,
+  type ToolResultInput,
+} from "./tool-results.ts";
 import { safeJson, truncateMiddle } from "./utils.ts";
 
 const MAX_USER_ENTRY_TOKENS = 1000;
+// The first user message is the brief: it defines the task and its bounds.
+const MAX_BRIEF_ENTRY_TOKENS = 2000;
+const MAX_ASK_ANSWER_ENTRY_TOKENS = 500;
+const MAX_PINNED_ASK_ANSWERS = 8;
 const MAX_TOOL_ENTRY_TOKENS = 1000;
-const MAX_RECENT_TOOL_ENTRIES = 40;
-const CHARS_PER_APPROX_TOKEN = 4;
+const MAX_TOOL_RESULT_ENTRY_TOKENS = 400;
+const USER_SPEAKER = "User";
+const BACKGROUND_JOB_TOOL = "background-job";
+const UNKNOWN_TOOL = "unknown";
 
 type TranscriptEntry = {
   index: number;
   order: number;
-  kind: "user" | "tool";
+  kind: "user" | "tool" | "result";
   text: string;
+  /** User-kind entries: the label before the colon, e.g. `User` or `Coordinator Main`. */
+  speaker?: string;
+  /** Kept whatever the message and token budgets say. */
+  pinned?: boolean;
+  /** The entry is a verified answer to an `ask` question. */
+  ask?: boolean;
+  /** Result-kind entries: rendered once the remaining budget is known. */
+  result?: ToolResultInput;
 };
 
 export type ClassifierTranscriptBudgets = {
   maxUserTokens: number;
   maxToolTokens: number;
+  /** Newest user, coordinator, and peer messages to keep. Pinned entries and the latest message always stay. */
+  maxUserMessages?: number;
+  maxToolCalls?: number;
+  includeToolResults?: boolean;
+  maxToolResultTokens?: number;
+  maxToolResults?: number;
 };
 
 /** Session entry holding user answers captured from OMP's built-in ask tool. */
@@ -107,6 +150,7 @@ function flattenUserContent(content: unknown): string {
 }
 
 function collectAssistantToolCalls(content: unknown): Array<{
+  id: string | undefined;
   name: string;
   input: unknown;
 }> {
@@ -117,6 +161,7 @@ function collectAssistantToolCalls(content: unknown): Array<{
         block,
       ): block is {
         type: string;
+        id?: unknown;
         name?: string;
         arguments?: unknown;
         input?: unknown;
@@ -124,6 +169,7 @@ function collectAssistantToolCalls(content: unknown): Array<{
     )
     .filter((block) => block.type === "toolCall" || block.type === "tool_use")
     .map((block) => ({
+      id: typeof block.id === "string" ? block.id : undefined,
       name: String(block.name ?? "tool"),
       input: "arguments" in block ? block.arguments : block.input,
     }));
@@ -161,42 +207,134 @@ function truncateToTokenCap(
   };
 }
 
-function collectTranscriptEntries(ctx: ExtensionContext): TranscriptEntry[] {
+function collectTranscriptEntries(
+  ctx: ExtensionContext,
+  includeToolResults: boolean,
+): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   const sessionManager = ctx.sessionManager as typeof ctx.sessionManager & {
-    buildContextEntries?: () => ReturnType<typeof ctx.sessionManager.getBranch>;
+    buildContextEntries?: () => SessionEntry[];
   };
   const contextEntries = sessionManager.buildContextEntries?.() ??
     sessionManager.getBranch();
   const askAnswers = capturedAskAnswers(ctx);
+  const parentId = parentAgentId(ctx);
+  const callInputs = new Map<string, unknown>();
+  let briefSeen = false;
 
   for (const [index, entry] of contextEntries.entries()) {
+    if (entry.type === "custom_message") {
+      const forwarded = agentMessageFromCustomEntry(entry, parentId);
+      const job = forwarded || !includeToolResults ? undefined : backgroundJobResult(entry);
+      if (forwarded?.body) {
+        entries.push({
+          index,
+          order: 0,
+          kind: "user",
+          speaker: agentMessageLabel(forwarded),
+          text: forwarded.body,
+        });
+      } else if (job) {
+        entries.push({
+          index,
+          order: 0,
+          kind: "result",
+          text: "",
+          result: { toolName: BACKGROUND_JOB_TOOL, ...job },
+        });
+      }
+      continue;
+    }
     if (entry.type !== "message") continue;
     const message = entry.message as {
       role?: string;
       content?: unknown;
+      attribution?: unknown;
       toolCallId?: unknown;
       toolName?: unknown;
       isError?: unknown;
+      details?: unknown;
     };
     if (message.role === "user") {
       const text = flattenUserContent(message.content).trim();
-      if (text) entries.push({ index, order: 0, kind: "user", text });
+      if (!text) continue;
+      const forwarded = agentMessageFromUserText(text, message.attribution);
+      if (forwarded) {
+        if (forwarded.body) {
+          entries.push({
+            index,
+            order: 0,
+            kind: "user",
+            speaker: agentMessageLabel(forwarded),
+            text: forwarded.body,
+          });
+        }
+        continue;
+      }
+      entries.push({
+        index,
+        order: 0,
+        kind: "user",
+        speaker: USER_SPEAKER,
+        text,
+        pinned: !briefSeen,
+      });
+      briefSeen = true;
       continue;
     }
-    // Tool output stays excluded. A captured ask answer counts only while its
-    // result remains in context, so branches and compaction drop it too.
     if (message.role === "toolResult") {
-      const answers = message.toolName === "ask" && message.isError !== true &&
-          typeof message.toolCallId === "string"
-        ? askAnswers.get(message.toolCallId) ?? []
+      const toolName = typeof message.toolName === "string" ? message.toolName : UNKNOWN_TOOL;
+      const toolCallId = typeof message.toolCallId === "string" ? message.toolCallId : undefined;
+      // A captured ask answer counts only while its result remains in context,
+      // so branches and compaction drop it too.
+      const answers = toolName === "ask" && message.isError !== true &&
+          toolCallId !== undefined
+        ? askAnswers.get(toolCallId) ?? []
         : [];
-      for (const [order, { question, answer }] of answers.entries()) {
+      if (answers.length > 0) {
+        for (const [order, { question, answer }] of answers.entries()) {
+          entries.push({
+            index,
+            order,
+            kind: "user",
+            speaker: USER_SPEAKER,
+            text: `Answered ask question "${question}": ${answer}`,
+            pinned: true,
+            ask: true,
+          });
+        }
+        continue;
+      }
+      const forwarded = toolName === "wait"
+        ? agentMessageFromWaitDetails(message.details, parentId)
+        : undefined;
+      if (forwarded) {
+        if (forwarded.body) {
+          entries.push({
+            index,
+            order: 0,
+            kind: "user",
+            speaker: agentMessageLabel(forwarded),
+            text: forwarded.body,
+          });
+        }
+        continue;
+      }
+      if (includeToolResults && !READ_ONLY_TOOLS.has(toolName)) {
         entries.push({
           index,
-          order,
-          kind: "user",
-          text: `Answered ask question "${question}": ${answer}`,
+          order: 0,
+          kind: "result",
+          text: "",
+          result: {
+            toolName,
+            call: toolCallId !== undefined && callInputs.has(toolCallId)
+              ? summarizeToolCall(callInputs.get(toolCallId))
+              : "",
+            isError: message.isError === true,
+            exitCode: exitCodeFromDetails(message.details),
+            content: message.content,
+          },
         });
       }
       continue;
@@ -206,6 +344,7 @@ function collectTranscriptEntries(ctx: ExtensionContext): TranscriptEntry[] {
     for (const [order, toolCall] of collectAssistantToolCalls(
       message.content,
     ).entries()) {
+      if (toolCall.id !== undefined) callInputs.set(toolCall.id, toolCall.input);
       entries.push({
         index,
         order,
@@ -215,12 +354,18 @@ function collectTranscriptEntries(ctx: ExtensionContext): TranscriptEntry[] {
     }
   }
 
+  // Only the newest answers stay pinned; older ones compete as ordinary messages.
+  const askEntries = entries.filter((entry) => entry.ask);
+  for (const entry of askEntries.slice(0, -MAX_PINNED_ASK_ANSWERS)) {
+    entry.pinned = false;
+  }
   return entries;
 }
 
 function selectUserEntries(
   entries: TranscriptEntry[],
   maxTokens: number,
+  maxMessages: number,
 ): { selected: TranscriptEntry[]; omitted: boolean } {
   const users = entries.filter((entry) => entry.kind === "user");
   if (users.length === 0) return { selected: [], omitted: false };
@@ -229,34 +374,42 @@ function selectUserEntries(
   const anchorBudget = distinctAnchors
     ? Math.max(1, Math.floor(maxTokens / 2))
     : maxTokens;
-  const entryCap = Math.min(MAX_USER_ENTRY_TOKENS, anchorBudget);
   const rendered = users.map((entry) => {
-    const truncated = truncateToTokenCap(`User: ${entry.text}`, entryCap);
+    const entryCap = entry.ask
+      ? MAX_ASK_ANSWER_ENTRY_TOKENS
+      : entry.pinned
+      ? MAX_BRIEF_ENTRY_TOKENS
+      : MAX_USER_ENTRY_TOKENS;
+    const truncated = truncateToTokenCap(
+      `${entry.speaker ?? USER_SPEAKER}: ${entry.text}`,
+      Math.min(entryCap, anchorBudget),
+    );
     return { ...entry, text: truncated.text, truncated: truncated.truncated };
   });
   const selectedIndices = new Set<number>();
   let usedTokens = 0;
 
-  const include = (index: number): void => {
-    if (selectedIndices.has(index)) return;
-    const entry = rendered[index];
-    if (!entry) return;
-    const tokens = approximateTokenCount(entry.text);
-    if (usedTokens + tokens > maxTokens) return;
-    selectedIndices.add(index);
+  // The brief, ask answers, and the latest message stay whatever the budgets
+  // say; each is capped at half the token budget, so tiny budgets cannot let
+  // one entry crowd out the rest.
+  const latest = rendered.length - 1;
+  for (const [position, entry] of rendered.entries()) {
+    if (entry.pinned || position === latest) {
+      selectedIndices.add(position);
+      usedTokens += approximateTokenCount(entry.text);
+    }
+  }
+  for (let position = latest - 1; position >= 0; position -= 1) {
+    if (selectedIndices.size >= maxMessages) break;
+    if (selectedIndices.has(position)) continue;
+    const tokens = approximateTokenCount(rendered[position].text);
+    if (usedTokens + tokens > maxTokens) continue;
+    selectedIndices.add(position);
     usedTokens += tokens;
-  };
-
-  // Prefer the latest user instruction when an extremely small configured
-  // budget cannot retain both intent anchors.
-  include(rendered.length - 1);
-  include(0);
-  for (let index = rendered.length - 2; index > 0; index -= 1) {
-    include(index);
   }
 
   return {
-    selected: rendered.filter((_entry, index) => selectedIndices.has(index)),
+    selected: rendered.filter((_entry, position) => selectedIndices.has(position)),
     omitted: selectedIndices.size < users.length || rendered.some((entry) =>
       entry.truncated
     ),
@@ -266,13 +419,14 @@ function selectUserEntries(
 function selectToolEntries(
   entries: TranscriptEntry[],
   maxTokens: number,
+  maxCalls: number,
 ): { selected: TranscriptEntry[]; omitted: boolean } {
   const tools = entries.filter((entry) => entry.kind === "tool");
   const selected: TranscriptEntry[] = [];
   let usedTokens = 0;
 
   for (let index = tools.length - 1; index >= 0; index -= 1) {
-    if (selected.length >= MAX_RECENT_TOOL_ENTRIES) break;
+    if (selected.length >= maxCalls) break;
     const entry = tools[index];
     if (!entry) continue;
     const truncated = truncateToTokenCap(
@@ -295,18 +449,67 @@ function selectToolEntries(
   };
 }
 
-/** Build classifier evidence from user text, verified ask answers, and assistant tool-call payloads. */
+function selectResultEntries(
+  entries: TranscriptEntry[],
+  maxTokens: number,
+  maxResults: number,
+): { selected: TranscriptEntry[]; omitted: boolean } {
+  const results = entries.filter((entry) => entry.kind === "result");
+  const selected: TranscriptEntry[] = [];
+  let usedTokens = 0;
+  let truncated = false;
+
+  for (let index = results.length - 1; index >= 0; index -= 1) {
+    if (selected.length >= maxResults) break;
+    const entry = results[index];
+    if (!entry?.result) continue;
+    const rendered = renderToolResult(
+      entry.result,
+      Math.min(MAX_TOOL_RESULT_ENTRY_TOKENS, maxTokens - usedTokens),
+    );
+    // Older results would see an even smaller remainder.
+    if (!rendered) break;
+    selected.push({ ...entry, text: rendered.text });
+    usedTokens += approximateTokenCount(rendered.text);
+    truncated ||= rendered.truncated;
+  }
+
+  selected.reverse();
+  return { selected, omitted: selected.length < results.length || truncated };
+}
+
+/**
+ * Build classifier evidence from user, coordinator, and peer messages, verified
+ * ask answers, assistant tool-call payloads, and bounded untrusted excerpts of
+ * recent tool results.
+ */
 export function buildClassifierTranscript(
   ctx: ExtensionContext,
   budgets: ClassifierTranscriptBudgets,
 ): string {
-  const entries = collectTranscriptEntries(ctx);
-  const users = selectUserEntries(entries, budgets.maxUserTokens);
-  const tools = selectToolEntries(entries, budgets.maxToolTokens);
-  const selected = [...users.selected, ...tools.selected].sort(
+  const entries = collectTranscriptEntries(
+    ctx,
+    budgets.includeToolResults ?? DEFAULT_INCLUDE_TOOL_RESULTS,
+  );
+  const users = selectUserEntries(
+    entries,
+    budgets.maxUserTokens,
+    budgets.maxUserMessages ?? DEFAULT_MAX_USER_TRANSCRIPT_MESSAGES,
+  );
+  const tools = selectToolEntries(
+    entries,
+    budgets.maxToolTokens,
+    budgets.maxToolCalls ?? DEFAULT_MAX_TOOL_TRANSCRIPT_CALLS,
+  );
+  const results = selectResultEntries(
+    entries,
+    budgets.maxToolResultTokens ?? DEFAULT_MAX_TOOL_RESULT_TRANSCRIPT_TOKENS,
+    budgets.maxToolResults ?? DEFAULT_MAX_TOOL_RESULT_TRANSCRIPT_ENTRIES,
+  );
+  const selected = [...users.selected, ...tools.selected, ...results.selected].sort(
     (left, right) => left.index - right.index || left.order - right.order,
   );
-  if (users.omitted || tools.omitted) {
+  if (users.omitted || tools.omitted || results.omitted) {
     selected.push({
       index: Number.MAX_SAFE_INTEGER,
       order: 0,

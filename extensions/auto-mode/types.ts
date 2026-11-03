@@ -52,6 +52,16 @@ export type AutoModeSettings = {
   deniedPaths?: unknown;
   maxUserTranscriptTokens?: number;
   maxToolTranscriptTokens?: number;
+  /** Keep at most this many ordinary user, coordinator, and peer messages (default 30). Pinned entries are exempt. */
+  maxUserTranscriptMessages?: number;
+  /** Keep at most this many recent tool calls (default 40). */
+  maxToolTranscriptCalls?: number;
+  /** Send bounded, untrusted excerpts of recent tool results to the classifier (default true). */
+  includeToolResults?: boolean;
+  /** Approximate-token budget for all tool-result excerpts together (default 2000). */
+  maxToolResultTranscriptTokens?: number;
+  /** Keep at most this many recent tool results (default 10). */
+  maxToolResultTranscriptEntries?: number;
   environment?: unknown;
   allow?: unknown;
   protectedPaths?: unknown;
@@ -98,6 +108,11 @@ export type EffectiveConfig = {
   deniedPaths: string[];
   maxUserTranscriptTokens: number;
   maxToolTranscriptTokens: number;
+  maxUserTranscriptMessages: number;
+  maxToolTranscriptCalls: number;
+  includeToolResults: boolean;
+  maxToolResultTranscriptTokens: number;
+  maxToolResultTranscriptEntries: number;
   environment: string[];
   allow: string[];
   protectedPaths: string[];

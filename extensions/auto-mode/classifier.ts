@@ -859,6 +859,11 @@ export const defaultClassifyAction: ClassifyAction = async (
   const transcript = buildClassifierTranscript(ctx, {
     maxUserTokens: config.maxUserTranscriptTokens,
     maxToolTokens: config.maxToolTranscriptTokens,
+    maxUserMessages: config.maxUserTranscriptMessages,
+    maxToolCalls: config.maxToolTranscriptCalls,
+    includeToolResults: config.includeToolResults,
+    maxToolResultTokens: config.maxToolResultTranscriptTokens,
+    maxToolResults: config.maxToolResultTranscriptEntries,
   });
   const contextText = `<loaded-project-instructions>\n${
     loadedContext || "(none)"

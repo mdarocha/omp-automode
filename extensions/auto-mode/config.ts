@@ -17,8 +17,13 @@ import {
   DEFAULT_ENVIRONMENT,
   DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
   DEFAULT_HARD_DENY,
+  DEFAULT_INCLUDE_TOOL_RESULTS,
   DEFAULT_LOG_CONFIG,
+  DEFAULT_MAX_TOOL_RESULT_TRANSCRIPT_ENTRIES,
+  DEFAULT_MAX_TOOL_RESULT_TRANSCRIPT_TOKENS,
+  DEFAULT_MAX_TOOL_TRANSCRIPT_CALLS,
   DEFAULT_MAX_TOOL_TRANSCRIPT_TOKENS,
+  DEFAULT_MAX_USER_TRANSCRIPT_MESSAGES,
   DEFAULT_MAX_USER_TRANSCRIPT_TOKENS,
   DEFAULT_PROTECTED_PATHS,
   DEFAULT_SOFT_DENY,
@@ -289,6 +294,11 @@ export function validateSettingsFile(
         "deniedPaths",
         "maxUserTranscriptTokens",
         "maxToolTranscriptTokens",
+        "maxUserTranscriptMessages",
+        "maxToolTranscriptCalls",
+        "includeToolResults",
+        "maxToolResultTranscriptTokens",
+        "maxToolResultTranscriptEntries",
         "environment",
         "allow",
         "protectedPaths",
@@ -364,10 +374,19 @@ export function validateSettingsFile(
         source,
         diagnostics,
       );
+      if (
+        hasOwn(autoMode, "includeToolResults") &&
+        typeof autoMode.includeToolResults !== "boolean"
+      ) {
+        diagnostics.push(
+          `${source}: autoMode.includeToolResults must be a boolean`,
+        );
+      }
       for (
         const key of [
           "maxUserTranscriptTokens",
           "maxToolTranscriptTokens",
+          "maxToolResultTranscriptTokens",
         ] as const
       ) {
         if (
@@ -376,6 +395,22 @@ export function validateSettingsFile(
         ) {
           diagnostics.push(
             `${source}: autoMode.${key} must be an integer of at least 32`,
+          );
+        }
+      }
+      for (
+        const key of [
+          "maxUserTranscriptMessages",
+          "maxToolTranscriptCalls",
+          "maxToolResultTranscriptEntries",
+        ] as const
+      ) {
+        if (
+          hasOwn(autoMode, key) &&
+          (!Number.isInteger(autoMode[key]) || Number(autoMode[key]) < 1)
+        ) {
+          diagnostics.push(
+            `${source}: autoMode.${key} must be an integer of at least 1`,
           );
         }
       }
@@ -599,6 +634,10 @@ function validTranscriptBudget(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 32;
 }
 
+function validTranscriptCount(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1;
+}
+
 function validFastClassifierBudget(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 16;
 }
@@ -650,6 +689,29 @@ function applyAutoModeScalars(
       )
       ? settings.maxToolTranscriptTokens
       : base.maxToolTranscriptTokens,
+    maxUserTranscriptMessages: validTranscriptCount(
+        settings.maxUserTranscriptMessages,
+      )
+      ? settings.maxUserTranscriptMessages
+      : base.maxUserTranscriptMessages,
+    maxToolTranscriptCalls: validTranscriptCount(
+        settings.maxToolTranscriptCalls,
+      )
+      ? settings.maxToolTranscriptCalls
+      : base.maxToolTranscriptCalls,
+    includeToolResults: typeof settings.includeToolResults === "boolean"
+      ? settings.includeToolResults
+      : base.includeToolResults,
+    maxToolResultTranscriptTokens: validTranscriptBudget(
+        settings.maxToolResultTranscriptTokens,
+      )
+      ? settings.maxToolResultTranscriptTokens
+      : base.maxToolResultTranscriptTokens,
+    maxToolResultTranscriptEntries: validTranscriptCount(
+        settings.maxToolResultTranscriptEntries,
+      )
+      ? settings.maxToolResultTranscriptEntries
+      : base.maxToolResultTranscriptEntries,
     log: mergeLog(base.log, settings.log),
   };
 }
@@ -690,6 +752,11 @@ export function buildEffectiveConfigFromSources(
     classifierTimeoutMs: DEFAULT_CLASSIFIER_TIMEOUT_MS,
     maxUserTranscriptTokens: DEFAULT_MAX_USER_TRANSCRIPT_TOKENS,
     maxToolTranscriptTokens: DEFAULT_MAX_TOOL_TRANSCRIPT_TOKENS,
+    maxUserTranscriptMessages: DEFAULT_MAX_USER_TRANSCRIPT_MESSAGES,
+    maxToolTranscriptCalls: DEFAULT_MAX_TOOL_TRANSCRIPT_CALLS,
+    includeToolResults: DEFAULT_INCLUDE_TOOL_RESULTS,
+    maxToolResultTranscriptTokens: DEFAULT_MAX_TOOL_RESULT_TRANSCRIPT_TOKENS,
+    maxToolResultTranscriptEntries: DEFAULT_MAX_TOOL_RESULT_TRANSCRIPT_ENTRIES,
     environment: [...DEFAULT_ENVIRONMENT],
     allow: [...DEFAULT_ALLOW],
     protectedPaths: [...DEFAULT_PROTECTED_PATHS],
