@@ -587,7 +587,7 @@ test("tool_call hook allows classifier-approved non-read-only actions", async ()
 	assert.equal(harness.classifierCalls, 1);
 });
 
-test("classifier-allowed action increments ca but not ad in statusline", async () => {
+test("classifier-allowed action increments classifierAllowed only", async () => {
 	const harness = await setupHookTest({
 		classifier: async () => ({ decision: "allow", tier: "allow", reason: "mock allow" }),
 	});
@@ -597,13 +597,12 @@ test("classifier-allowed action increments ca but not ad in statusline", async (
 		input: { command: "npm test" },
 	}, harness.ctx);
 
-	const last = (harness.ctx.statuses as Array<{ key: string; text?: string }>)
-		.filter((s) => s.key === "pi-automode")
-		.at(-1)?.text;
-	assert.match(last ?? "", /ca:1 cd:0/);
+	const state = harness.entries.at(-1)?.data;
+	assert.equal(state.classifierAllowed, 1);
+	assert.equal(state.classifierDenied, 0);
 });
 
-test("classifier-denied action increments cd but not ca in statusline", async () => {
+test("classifier-denied action increments classifierDenied only", async () => {
 	const harness = await setupHookTest({
 		classifier: async () => ({ decision: "block", tier: "soft_deny", reason: "mock block" }),
 	});
@@ -613,10 +612,9 @@ test("classifier-denied action increments cd but not ca in statusline", async ()
 		input: { command: "npm publish" },
 	}, harness.ctx);
 
-	const last = (harness.ctx.statuses as Array<{ key: string; text?: string }>)
-		.filter((s) => s.key === "pi-automode")
-		.at(-1)?.text;
-	assert.match(last ?? "", /ca:0 cd:1/);
+	const state = harness.entries.at(-1)?.data;
+	assert.equal(state.classifierAllowed, 0);
+	assert.equal(state.classifierDenied, 1);
 });
 
 test("tool_call hook blocks classifier-needed actions when no classifier is available", async () => {

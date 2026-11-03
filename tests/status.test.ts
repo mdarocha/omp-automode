@@ -2,12 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
 	parseToolPattern,
+	FALLBACK_STATUS_ICON,
+	statusIcon,
 	statusLine,
 	statusText,
 } from "../extensions/auto-mode.ts";
 import {
 	baseConfig,
 	baseState,
+	createFakeCtx,
+	setupHookTest,
 } from "./test-helpers.ts";
 
 test("statusText reports the permissions.allow rule count", () => {
@@ -30,45 +34,117 @@ test("statusText reports the configured classifier reasoning level", () => {
 	assert.match(text, /^classifier reasoning: high$/m);
 });
 
-test("statusLine: enabled with no classifier calls omits the ca/cd segment", () => {
-	const config = baseConfig();
-	const state = baseState({ checkedActions: 6, blockedActions: 1 });
-	assert.equal(statusLine(config, state), "AM ● a:5 d:1");
+const ICON = "◆";
+
+test("statusLine: enabled shows the icon and auto", () => {
+	assert.equal(statusLine(baseConfig(), baseState(), ICON), `${ICON} auto`);
 });
 
-test("statusLine: enabled with classifier calls appends ca/cd segment", () => {
-	const config = baseConfig();
-	const state = baseState({ checkedActions: 6, blockedActions: 1, classifierAllowed: 2, classifierDenied: 1 });
-	assert.equal(statusLine(config, state), "AM ● a:5 d:1 ca:2 cd:1");
+test("statusLine: enabled with blocks appends the blocked count", () => {
+	const state = baseState({ checkedActions: 6, blockedActions: 2 });
+	assert.equal(statusLine(baseConfig(), state, ICON), `${ICON} auto · 2 blocked`);
 });
 
-test("statusLine: disabled shows empty circle with frozen counts", () => {
-	const config = baseConfig({ enabled: false });
-	const state = baseState({ checkedActions: 18, blockedActions: 3, classifierAllowed: 7, classifierDenied: 5 });
-	assert.equal(statusLine(config, state), "AM ○ a:15 d:3 ca:7 cd:5");
+test("statusLine: classifier counters do not change the text", () => {
+	const state = baseState({ checkedActions: 6, classifierAllowed: 4 });
+	assert.equal(statusLine(baseConfig(), state, ICON), `${ICON} auto`);
 });
 
-test("statusLine: allowed is derived from checked minus blocked", () => {
-	const config = baseConfig();
-	const state = baseState({ checkedActions: 10, blockedActions: 3, classifierAllowed: 1, classifierDenied: 1 });
-	assert.equal(statusLine(config, state), "AM ● a:7 d:3 ca:1 cd:1");
+test("statusLine: disabled shows off and drops the blocked count", () => {
+	const state = baseState({ checkedActions: 6, blockedActions: 3 });
+	assert.equal(statusLine(baseConfig({ enabled: false }), state, ICON), `${ICON} off`);
 });
 
-test("statusLine: zero counts render a:0 d:0 with no ca/cd segment", () => {
-	const config = baseConfig();
-	assert.equal(statusLine(config, baseState()), "AM ● a:0 d:0");
+test("statusLine: a classifier call in flight shows checking", () => {
+	const state = baseState({ blockedActions: 2 });
+	assert.equal(statusLine(baseConfig(), state, ICON, true), `${ICON} checking…`);
 });
 
-test("statusLine: classifier segment shows when only allows have happened", () => {
-	const config = baseConfig();
-	const state = baseState({ checkedActions: 4, blockedActions: 0, classifierAllowed: 3, classifierDenied: 0 });
-	assert.equal(statusLine(config, state), "AM ● a:4 d:0 ca:3 cd:0");
+test("statusLine: checking never shows while disabled", () => {
+	assert.equal(statusLine(baseConfig({ enabled: false }), baseState(), ICON, true), `${ICON} off`);
 });
 
-test("statusLine: classifier segment shows when only denials have happened", () => {
-	const config = baseConfig();
-	const state = baseState({ checkedActions: 2, blockedActions: 2, classifierAllowed: 0, classifierDenied: 2 });
-	assert.equal(statusLine(config, state), "AM ● a:0 d:2 ca:0 cd:2");
+test("statusIcon prefers the omp shield glyph", () => {
+	assert.equal(statusIcon({ cmd: { shield: "S" }, icon: { auto: "A" } }), "S");
+});
+
+test("statusIcon falls back to the omp auto icon when the preset has no shield", () => {
+	assert.equal(statusIcon({ cmd: { shield: "" }, icon: { auto: "[A]" } }), "[A]");
+});
+
+test("statusIcon falls back to a plain glyph on themes without icons", () => {
+	assert.equal(statusIcon({}), FALLBACK_STATUS_ICON);
+	assert.equal(statusIcon(undefined), FALLBACK_STATUS_ICON);
+});
+
+const statusTexts = (ctx: ReturnType<typeof createFakeCtx>) =>
+	ctx.statuses.map(({ text }) => text);
+
+test("session_start publishes the compact status", async () => {
+	const harness = await setupHookTest();
+	assert.deepEqual(statusTexts(harness.ctx), [`${FALLBACK_STATUS_ICON} auto`]);
+});
+
+test("session_start uses the theme icon when the theme has one", async () => {
+	const ctx = createFakeCtx();
+	(ctx.ui.theme as any).cmd = { shield: "S" };
+	await setupHookTest({ ctx });
+	assert.deepEqual(statusTexts(ctx), ["S auto"]);
+});
+
+test("tool_call shows checking while the classifier runs and restores the status after", async () => {
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const harness = await setupHookTest({
+		classifier: async () => {
+			await gate;
+			return { decision: "allow", tier: "none", reason: "ok" };
+		},
+	});
+	const pending = harness.emit("tool_call", {
+		toolName: "bash",
+		input: { command: "echo hi" },
+	}, harness.ctx);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(statusTexts(harness.ctx).at(-1), `${FALLBACK_STATUS_ICON} checking…`);
+	release();
+	await pending;
+	assert.equal(statusTexts(harness.ctx).at(-1), `${FALLBACK_STATUS_ICON} auto`);
+});
+
+test("tool_call keeps checking until the last of two concurrent classifier calls finishes", async () => {
+	const releases: Array<() => void> = [];
+	const harness = await setupHookTest({
+		classifier: () => new Promise((resolve) => {
+			releases.push(() => resolve({ decision: "allow", tier: "none", reason: "ok" }));
+		}),
+	});
+	const call = () => harness.emit("tool_call", {
+		toolName: "bash",
+		input: { command: "echo hi" },
+	}, harness.ctx);
+	const first = call();
+	const second = call();
+	await new Promise((resolve) => setImmediate(resolve));
+	releases[0]!();
+	await first;
+	assert.equal(statusTexts(harness.ctx).at(-1), `${FALLBACK_STATUS_ICON} checking…`);
+	releases[1]!();
+	await second;
+	assert.equal(statusTexts(harness.ctx).at(-1), `${FALLBACK_STATUS_ICON} auto`);
+});
+
+test("tool_call shows the blocked count after a classifier denial", async () => {
+	const harness = await setupHookTest({
+		classifier: async () => ({ decision: "block", tier: "none", reason: "no" }),
+	});
+	await harness.emit("tool_call", {
+		toolName: "bash",
+		input: { command: "echo hi" },
+	}, harness.ctx);
+	assert.equal(statusTexts(harness.ctx).at(-1), `${FALLBACK_STATUS_ICON} auto · 1 blocked`);
 });
 
 // --- observability logging -------------------------------------------------
