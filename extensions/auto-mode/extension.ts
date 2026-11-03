@@ -22,7 +22,6 @@ import {
   DEFAULT_PROTECTED_PATHS,
   DEFAULT_SOFT_DENY,
   PATH_BEARING_TOOLS,
-  PI_GLOBAL_SETTINGS,
   READ_ONLY_TOOLS,
 } from "./constants.ts";
 import {
@@ -32,6 +31,10 @@ import {
   writeGlobalClassifierModel,
 } from "./config.ts";
 import { deterministicHardDeny } from "./hard-deny.ts";
+import {
+  resolveConfigLocations,
+  selectLegacyGlobalConfigPath,
+} from "./locations.ts";
 import {
   createLogger,
   newDecisionId,
@@ -51,6 +54,7 @@ import {
   extractInputPath,
   isInside,
   isProtectedPath,
+  registerOmpAgentDir,
   resolvePathForPolicy,
   resolveToolInputPath,
 } from "./paths.ts";
@@ -193,10 +197,21 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
   const now = options.now ?? (() => new Date());
 
   return function piAutomode(pi: ExtensionAPI) {
+    const locations = resolveConfigLocations(pi);
+    if (locations.agentDir !== undefined) {
+      registerOmpAgentDir(locations.agentDir);
+    }
+    const logRoot = options.logRoot ?? locations.logRoot;
     const globalConfig = options.prepareGlobalConfig?.() ??
       (options.loadConfig
-        ? { status: "current" as const, activePath: PI_GLOBAL_SETTINGS[0] }
-        : prepareGlobalConfig());
+        ? {
+          status: "current" as const,
+          activePath: locations.globalConfigPath,
+        }
+        : prepareGlobalConfig({
+          currentPath: locations.globalConfigPath,
+          legacyPath: selectLegacyGlobalConfigPath(locations),
+        }));
     const loadConfigWithDiagnostics = (
       cwd: string,
       projectTrusted: boolean,
@@ -210,6 +225,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
           cwd,
           projectTrusted,
           globalConfig.activePath,
+          locations.projectConfigDirs,
         );
       return globalConfig.diagnostic
         ? {
@@ -267,6 +283,15 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       );
     }
 
+    function configSourcesReport() {
+      return {
+        runtime: locations.runtime,
+        agentDir: locations.agentDir,
+        global: globalConfig.activePath,
+        ...loadResult.sources,
+      };
+    }
+
     function inspectAutomode(
       action: InspectionAction,
       ctx: ExtensionContext,
@@ -291,12 +316,13 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       if (action === "config") {
         return {
           config: cfg,
+          configSources: configSourcesReport(),
           logFile: resolveLogPath(
             ctx.sessionManager.getSessionFile?.(),
             ctx.sessionManager.getSessionDir?.() ?? "",
             ctx.sessionManager.getSessionId?.() ?? "unknown",
             ctx.cwd,
-            options.logRoot,
+            logRoot,
             now(),
           ),
           diagnostics: modelVisibleConfigDiagnostics(configDiagnostics),
@@ -471,7 +497,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
           sessionDir: ctx.sessionManager.getSessionDir?.() ?? "",
           sessionCwd: ctx.cwd,
           sessionId: ctx.sessionManager.getSessionId?.() ?? "unknown",
-          logRoot: options.logRoot,
+          logRoot,
           now: now(),
         }),
         decisionId: newDecisionId(),
@@ -882,13 +908,14 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
           ctx.sessionManager.getSessionDir?.() ?? "",
           ctx.sessionManager.getSessionId?.() ?? "unknown",
           ctx.cwd,
-          options.logRoot,
+          logRoot,
           now(),
         );
         ctx.ui.notify(
           safeJson(
             {
               config: effectiveConfig(),
+              configSources: configSourcesReport(),
               logFile,
               diagnostics: configDiagnostics,
             },

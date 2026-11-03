@@ -77,8 +77,8 @@ Jev evaluates typed policy questions in one request; code combines the answers w
 /automode defaults  # print the built-in rule lists
 /automode config    # effective config, resolved log file path, + diagnostics
 /automode denials   # denial history for this session
-/automode model     # open classifier model selector and save to ~/.pi/agent/extensions/pi-automode/config.json
-/automode model provider/model-id # save classifier model to ~/.pi/agent/extensions/pi-automode/config.json
+/automode model     # open classifier model selector and save to the global config file
+/automode model provider/model-id # save classifier model to the global config file
 ```
 
 ## Agent diagnostics
@@ -139,7 +139,7 @@ The extension blocks these before any allow or classifier decision:
 - cron, launch agent, and system service persistence
 - TLS/certificate/auth weakening patterns
 - root, home, and system-path destructive deletes. Subtrees of validated launcher-declared temp directories are treated as disposable. Declared roots that alias `HOME`, `/`, or a system root, or that contain `HOME`, are rejected instead.
-- edits to `.pi/automode*`, `.pi` auto-mode files, and this extension's safety-control files
+- edits to `.pi/automode*`, `.omp/automode*`, the global automode config directory, and this extension's safety-control files
 
 After these checks, pi-automode applies `permissions.allow`. Protected `write` and `edit` targets continue to the classifier.
 
@@ -173,7 +173,7 @@ Deterministic path checks include possible directories reached by `cd` and resol
 
 ## Examples
 
-- `examples/automode.local.json`: copy to `.pi/automode.local.json` in a project and edit the domains, buckets, and source-control org.
+- `examples/automode.local.json`: copy to `.pi/automode.local.json` (`.omp/automode.local.json` under OMP) in a project and edit the domains, buckets, and source-control org.
 - [Permission recipes](docs/permission-recipes.md): use narrow examples for common permission and classifier-policy changes.
 
 ## Known limits

@@ -15,7 +15,17 @@ import {
   resolve,
 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HOME, PATH_BEARING_TOOLS, PROFILE_FILES } from "./constants.ts";
+import {
+  HOME,
+  OMP_DEFAULT_AGENT_DIR,
+  OMP_GLOBAL_DATA_DIR_NAME,
+  PATH_BEARING_TOOLS,
+  PI_AGENT_DIR,
+  PROFILE_FILES,
+} from "./constants.ts";
+
+const PROJECT_CONFIG_DIR = /\/\.(?:pi|omp)\//;
+const PROJECT_CONFIG_EXTENSIONS_DIR = /\/\.(?:pi|omp)\/extensions\//;
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
@@ -231,23 +241,56 @@ export function isProtectedPath(
   return false;
 }
 
+/** omp agent directories that are protected in addition to the default one. */
+const registeredOmpAgentDirs = new Set<string>();
+
+/**
+ * Protect the automode data directory and extensions of the omp agent
+ * directory that is active in this process (profile or `PI_CONFIG_DIR`).
+ */
+export function registerOmpAgentDir(agentDir: string): void {
+  const resolved = resolve(agentDir);
+  registeredOmpAgentDirs.add(normalizeProtectedPathForMatch(resolved));
+  // Policy checks compare symlink-resolved paths, so register that form too.
+  registeredOmpAgentDirs.add(
+    normalizeProtectedPathForMatch(resolvePathForPolicy(resolved) ?? resolved),
+  );
+}
+
+function isUnderRoot(normalized: string, root: string): boolean {
+  return normalized === root || normalized.startsWith(`${root}/`);
+}
+
+function isGlobalSafetyControlPath(normalized: string): boolean {
+  const piAgentRoot = normalizeProtectedPathForMatch(PI_AGENT_DIR);
+  if (
+    normalized === `${piAgentRoot}/settings.json` ||
+    isUnderRoot(normalized, `${piAgentRoot}/extensions`) ||
+    isUnderRoot(normalized, `${piAgentRoot}/settings`)
+  ) {
+    return true;
+  }
+  const ompAgentRoots = new Set([
+    normalizeProtectedPathForMatch(OMP_DEFAULT_AGENT_DIR),
+    ...registeredOmpAgentDirs,
+  ]);
+  for (const root of ompAgentRoots) {
+    if (
+      isUnderRoot(normalized, `${root}/extensions`) ||
+      isUnderRoot(normalized, `${root}/${OMP_GLOBAL_DATA_DIR_NAME}`)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isSafetyControlPath(path: string, cwd: string): boolean {
   const policyPath = resolvePathForPolicy(path) ?? resolve(path);
   const policyCwd = resolvePathForPolicy(cwd) ?? resolve(cwd);
   const normalized = normalizeProtectedPathForMatch(policyPath);
   const file = basename(normalized);
-  const piAgentRoot = normalizeProtectedPathForMatch(
-    resolve(HOME, ".pi/agent"),
-  );
-  const globalExtensions = `${piAgentRoot}/extensions`;
-  const globalSettings = `${piAgentRoot}/settings`;
-  if (
-    normalized === `${piAgentRoot}/settings.json` ||
-    normalized === globalExtensions ||
-    normalized.startsWith(`${globalExtensions}/`) ||
-    normalized === globalSettings ||
-    normalized.startsWith(`${globalSettings}/`)
-  ) {
+  if (isGlobalSafetyControlPath(normalized)) {
     return true;
   }
   if (
@@ -256,10 +299,12 @@ export function isSafetyControlPath(path: string, cwd: string): boolean {
   ) {
     return true;
   }
-  if (normalized.includes("/.pi/extensions/") && file.includes("auto")) {
+  if (PROJECT_CONFIG_EXTENSIONS_DIR.test(normalized) && file.includes("auto")) {
     return true;
   }
-  if (normalized.includes("/.pi/") && file.startsWith("automode")) return true;
+  if (PROJECT_CONFIG_DIR.test(normalized) && file.startsWith("automode")) {
+    return true;
+  }
   if (
     normalized.includes("/pi-automode/") ||
     (isInside(policyPath, policyCwd) && file.includes("auto-mode"))

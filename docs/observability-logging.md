@@ -6,7 +6,7 @@ Logging is off by default. Logging fails open, so a write error never changes an
 
 ## Enabling
 
-Set `autoMode.log` in a Pi-owned configuration source. These sources include `~/.pi/agent/extensions/pi-automode/config.json`, trusted `.pi/automode.local.json`, and `PI_AUTOMODE_SETTINGS_JSON`.
+Set `autoMode.log` in a Pi-owned configuration source. These sources include the global config file (`~/.pi/agent/extensions/pi-automode/config.json` under Pi, `<agentDir>/automode/config.json` under OMP), trusted `.pi/automode.local.json` (`.omp/automode.local.json` under OMP), and `PI_AUTOMODE_SETTINGS_JSON`.
 
 ```json
 {
@@ -46,6 +46,8 @@ Pi in-memory sessions have no session file or session directory. These sessions 
 ```text
 ~/.pi/agent/extensions/pi-automode/logs/<encoded-session-cwd>/YYYY-MM-DD/<session-id>-pi-automode.jsonl
 ```
+
+Under OMP, the root is `<agentDir>/automode/logs/` instead.
 
 The project directory uses the same `--path-with-dashes--` encoding as normal Pi session directories. The date partition uses UTC.
 

@@ -4,19 +4,32 @@ The extension follows the documented Claude Code configuration model where Pi su
 
 It reads `autoMode` only from Pi-owned configuration sources:
 
-- `~/.pi/agent/extensions/pi-automode/config.json`
-- `.pi/automode.local.json` for trusted projects
+- the global config file
+- the project-local config file for trusted projects
 - `PI_AUTOMODE_SETTINGS_JSON`
 
-At startup, pi-automode moves a legacy `~/.pi/agent/automode.json` file to the new global path. If both files exist, it uses the new file and reports the conflict. If migration fails, it uses the legacy file for that session and reports the error.
+Which files these are depends on the host:
 
-It does not read project configuration until Pi trusts the project. For an untrusted project, it ignores `.pi/automode.local.json` and `.pi/automode.json`. `/automode config` reports each ignored file that exists.
+| | Pi | OMP |
+|---|---|---|
+| Global config | `~/.pi/agent/extensions/pi-automode/config.json` | `<agentDir>/automode/config.json` |
+| Project-local config | `.pi/automode.local.json` | `.omp/automode.local.json` |
+| Shared project config | `.pi/automode.json` | `.omp/automode.json` |
+| Logs for in-memory sessions | `~/.pi/agent/extensions/pi-automode/logs/` | `<agentDir>/automode/logs/` |
 
-Shared project `.pi/automode.json` cannot weaken auto mode. For a trusted project, it can add `permissions.deny` and `permissions.ask` rules.
+Pi-automode detects OMP through the `getAgentDir()` function that OMP exposes to extensions. `<agentDir>` is the directory OMP reports, normally `~/.omp/agent`. It follows OMP profiles and `PI_CONFIG_DIR`. Under any other host, pi-automode uses the Pi paths. See [ADR-003](adr/ADR-003-omp-config-directory.md).
+
+At startup, pi-automode selects one active global config path for the session. Under Pi, it moves a legacy `~/.pi/agent/automode.json` file to the Pi path. Under OMP, it moves a Pi config (`~/.pi/agent/extensions/pi-automode/config.json`, or the older `~/.pi/agent/automode.json`) to `<agentDir>/automode/config.json`. This is a one-way move: Pi no longer finds the file afterwards. If both files exist, pi-automode uses the new file and reports the conflict. If migration fails, it uses the legacy file for that session and reports the error.
+
+Under OMP, project files come from `.omp/`. If `.omp/` lacks a file but `.pi/` has it, pi-automode reads the `.pi/` file and `/automode config` reports the legacy location. If both exist, it reads the `.omp/` file and reports the ignored `.pi/` file. Pi-automode never moves project files. `/automode config` shows the selected files under `configSources`.
+
+It does not read project configuration until the host trusts the project. For an untrusted project, it ignores the project config files in both `.omp/` and `.pi/`. `/automode config` reports each ignored file that exists.
+
+Shared project `automode.json` (`.pi/automode.json` under Pi, `.omp/automode.json` under OMP) cannot weaken auto mode. For a trusted project, it can add `permissions.deny` and `permissions.ask` rules.
 
 The shared file cannot set `autoMode` or add `permissions.allow` rules. If the file contains `permissions.allow`, `/automode config` reports a diagnostic.
 
-To disable pi-automode for the current project, create or edit `.pi/automode.local.json`:
+To disable pi-automode for the current project, create or edit `.pi/automode.local.json` (`.omp/automode.local.json` under OMP):
 
 ```json
 {
@@ -26,9 +39,9 @@ To disable pi-automode for the current project, create or edit `.pi/automode.loc
 }
 ```
 
-This file is project-local. Pi reads it only after project trust. Do not commit this file. Shared project `.pi/automode.json` cannot disable auto mode.
+This file is project-local. The host must trust the project before pi-automode reads it. Do not commit this file. Shared project `automode.json` cannot disable auto mode.
 
-Set a global default classifier model in `~/.pi/agent/extensions/pi-automode/config.json`. For a trusted project, override it in `.pi/automode.local.json`.
+Set a global default classifier model in the global config file. For a trusted project, override it in the project-local config file.
 
 For Pi/OMP chat models, `classifierReasoningLevel` requests `low`, `medium`, `high`, `xhigh`, or `max` reasoning for both classifier stages. If the key is absent, pi-automode sends no reasoning preference. The server then selects the level.
 

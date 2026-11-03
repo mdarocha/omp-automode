@@ -69,7 +69,7 @@ export type LoggerOptions = {
   /** Effective cwd for an in-memory session. */
   sessionCwd?: string;
   sessionId: string;
-  /** Test/embedder override. Runtime uses ~/.pi/agent/extensions/pi-automode/logs. */
+  /** Test/embedder override. Runtime uses ~/.pi/agent/extensions/pi-automode/logs under Pi and <agentDir>/automode/logs under omp. */
   logRoot?: string;
   /** Test clock used for the UTC date partition. */
   now?: Date;

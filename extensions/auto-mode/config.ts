@@ -25,8 +25,9 @@ import {
   MAX_CLASSIFIER_TIMEOUT_MS,
   PI_GLOBAL_SETTINGS,
   PI_LEGACY_GLOBAL_SETTINGS,
-  PI_PROJECT_LOCAL_SETTINGS,
-  PI_PROJECT_SHARED_SETTINGS,
+  PI_PROJECT_DIR,
+  PROJECT_LOCAL_SETTINGS_FILE,
+  PROJECT_SHARED_SETTINGS_FILE,
 } from "./constants.ts";
 import { parseModelSpec } from "./model.ts";
 import {
@@ -796,11 +797,48 @@ function ignoredSharedAllowDiagnostics(
   });
 }
 
+type ProjectSettingsSelection = {
+  /** Path that is read when the project is trusted. */
+  path: string;
+  /** Every location that could hold this file, most preferred first. */
+  candidates: string[];
+  diagnostics: string[];
+};
+
+/**
+ * Choose the project settings file for one file name. The first config
+ * directory that holds the file wins. A later directory is a legacy location:
+ * it is used only when the preferred one lacks the file, and never moved.
+ */
+function selectProjectSettingsPath(
+  cwd: string,
+  fileName: string,
+  projectConfigDirs: string[],
+): ProjectSettingsSelection {
+  const candidates = projectConfigDirs.map((dir) => resolve(cwd, dir, fileName));
+  const preferred = candidates[0] ?? resolve(cwd, PI_PROJECT_DIR, fileName);
+  const existing = candidates.filter(existsSync);
+  const [active, ...ignored] = existing;
+  if (active === undefined) {
+    return { path: preferred, candidates, diagnostics: [] };
+  }
+  const diagnostics = ignored.map((path) =>
+    `${path}: ignored because ${active} exists`
+  );
+  if (active !== preferred) {
+    diagnostics.push(
+      `${active}: using legacy project config location; move it to ${preferred}`,
+    );
+  }
+  return { path: active, candidates, diagnostics };
+}
+
 /** Load config from disk and environment variables, including diagnostics for `/automode config`. Project files require explicit trust. */
 export function loadEffectiveConfigWithDiagnostics(
   cwd: string,
   projectTrusted = false,
   globalSettingsPath = PI_GLOBAL_SETTINGS[0],
+  projectConfigDirs: string[] = [PI_PROJECT_DIR],
 ): ConfigLoadResult {
   const inlineSettings: SettingsFile[] = [];
   const diagnostics: string[] = [];
@@ -823,23 +861,28 @@ export function loadEffectiveConfigWithDiagnostics(
   }
 
   const globalFiles = [readSettingsFile(globalSettingsPath)];
-  const projectLocalPaths = PI_PROJECT_LOCAL_SETTINGS.map((file) =>
-    resolve(cwd, file)
+  const projectLocal = selectProjectSettingsPath(
+    cwd,
+    PROJECT_LOCAL_SETTINGS_FILE,
+    projectConfigDirs,
   );
-  const projectSharedPaths = PI_PROJECT_SHARED_SETTINGS.map((file) =>
-    resolve(cwd, file)
+  const projectShared = selectProjectSettingsPath(
+    cwd,
+    PROJECT_SHARED_SETTINGS_FILE,
+    projectConfigDirs,
   );
   const projectLocalFiles = projectTrusted
-    ? projectLocalPaths.map(readSettingsFile)
+    ? [readSettingsFile(projectLocal.path)]
     : [];
   const projectSharedFiles = projectTrusted
-    ? projectSharedPaths.map(readSettingsFile)
+    ? [readSettingsFile(projectShared.path)]
     : [];
-  if (!projectTrusted) {
+  if (projectTrusted) {
+    diagnostics.push(...projectLocal.diagnostics, ...projectShared.diagnostics);
+  } else {
     for (
-      const path of [...projectLocalPaths, ...projectSharedPaths].filter(
-        existsSync,
-      )
+      const path of [...projectLocal.candidates, ...projectShared.candidates]
+        .filter(existsSync)
     ) {
       diagnostics.push(`${path}: ignored because project is not trusted`);
     }
@@ -865,6 +908,11 @@ export function loadEffectiveConfigWithDiagnostics(
       ...sharedAllowDiagnostics,
       ...diagnostics,
     ],
+    sources: {
+      global: globalSettingsPath,
+      projectLocal: projectLocal.path,
+      projectShared: projectShared.path,
+    },
   };
 }
 
@@ -873,11 +921,13 @@ export function loadEffectiveConfig(
   cwd: string,
   projectTrusted = false,
   globalSettingsPath = PI_GLOBAL_SETTINGS[0],
+  projectConfigDirs: string[] = [PI_PROJECT_DIR],
 ): EffectiveConfig {
   return loadEffectiveConfigWithDiagnostics(
     cwd,
     projectTrusted,
     globalSettingsPath,
+    projectConfigDirs,
   ).config;
 }
 

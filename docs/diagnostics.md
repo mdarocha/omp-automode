@@ -57,7 +57,7 @@ String values and the complete serialized result also have size limits. Treat a 
 
 ## Observability log path
 
-Use the `config` view to get the log path for the current session. Its `logFile` value uses the same resolution as observability logging:
+Use the `config` view to get the log path and the selected config files (`configSources`) for the current session. Its `logFile` value uses the same resolution as observability logging:
 
 - A persisted session uses a sidecar beside its Pi session file.
 - An in-memory session uses the application-owned log directory for the effective session working directory.
@@ -67,6 +67,8 @@ For in-memory sessions, pi-automode uses this default location:
 ```text
 ~/.pi/agent/extensions/pi-automode/logs/<encoded-session-cwd>/YYYY-MM-DD/<session-id>-pi-automode.jsonl
 ```
+
+Under OMP, the root is `<agentDir>/automode/logs/` instead.
 
 This includes `--no-session` runs and non-persisted subagents. The path does not use the launching process working directory.
 
