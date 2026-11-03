@@ -25,6 +25,7 @@ const STAGE_BY_KIND: Partial<Record<DecisionKind, DecisionStage>> = {
   "deterministic-hard-deny": "hard-deny",
   "deterministic-path-deny": "path",
   "inside-working-directory": "inside-cwd",
+  "url-scheme": "url-scheme",
   "permissions.allow": "allow",
   "read-only": "read-only",
 };

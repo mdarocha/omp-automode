@@ -5,6 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
 	createPiAutomode,
+	decisionStage,
 	parseToolPattern,
 	type ClassifyAction,
 	type EffectiveConfig,
@@ -276,4 +277,8 @@ test("the unavailable-classifier block text has no doubled period when the reaso
 
 	assert.match(result.reason ?? "", /fails closed\. This is not a policy denial/);
 	assert.doesNotMatch(result.reason ?? "", /\.\./);
+});
+
+test("url-scheme decisions get their own enforcement stage", () => {
+	assert.equal(decisionStage("url-scheme"), "url-scheme");
 });

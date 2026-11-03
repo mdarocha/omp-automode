@@ -79,7 +79,7 @@ Pi-automode writes one `decision` entry for each tool-call decision. Each allowe
 | `classifierModel` | the configured classifier model for a classifier-routed decision |
 | `reasoning` | classifier reasoning mode and requested or effective level. See the examples below. |
 | `durationMs` | milliseconds from the tool call reaching auto mode to this decision. It includes any wait on a `permissions.ask` prompt. |
-| `stage` | what decided: `permissions`, `hard-deny`, `path`, `inside-cwd`, `allow`, `read-only`, `classifier-fast`, or `classifier-detailed`. It is absent for `setup` blocks and for a classifier decision that never reached a model call. For a classifier decision it names the last stage that ran, so `classifier-fast` is a fast allow or a fast-stage failure. |
+| `stage` | what decided: `permissions`, `hard-deny`, `path`, `inside-cwd`, `url-scheme`, `allow`, `read-only`, `classifier-fast`, or `classifier-detailed`. It is absent for `setup` blocks and for a classifier decision that never reached a model call. For a classifier decision it names the last stage that ran, so `classifier-fast` is a fast allow or a fast-stage failure. |
 | `agent` | `{ id, name, kind }` of the agent that issued the call. OMP reports it (`kind` is `main` or `sub`). Pi reports no agent, so the field is absent. |
 | `hasUI` | whether the session had an interactive UI. A headless session cannot answer `permissions.ask`. |
 | `errorKind` | present only when the classifier failed closed instead of judging the action: `rate-limit`, `timeout`, `auth`, `server`, `aborted`, `invalid-response`, `context-limit`, or `no-classifier`. A normal classifier denial has no `errorKind`. The error text itself is never logged. |

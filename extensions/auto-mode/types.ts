@@ -221,6 +221,7 @@ export type DecisionStage =
   | "hard-deny"
   | "path"
   | "inside-cwd"
+  | "url-scheme"
   | "allow"
   | "read-only"
   | "classifier-fast"
