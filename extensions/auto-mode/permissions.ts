@@ -22,7 +22,7 @@ export const MAX_WILDCARD_INPUT_LENGTH = 1024 * 1024;
 const bashPatternAnalyses = new WeakMap<ToolPattern, BashAnalysis>();
 
 /** Preserve the previous non-Unicode RegExp `/i` case-equivalence rules. */
-function canonicalizeCase(value: string): string {
+export function canonicalizeCase(value: string): string {
   let canonical = "";
   for (let index = 0; index < value.length; index += 1) {
     const character = value[index] ?? "";
@@ -333,7 +333,7 @@ export function matchesDeniedPath(
   );
 }
 
-function deniedPatternVariants(pattern: string): string[] {
+export function deniedPatternVariants(pattern: string): string[] {
   const expanded = expandHomePattern(pattern).replace(/\\/g, "/");
   const wildcardIndex = expanded.indexOf("*");
   if (wildcardIndex === -1) {
@@ -358,12 +358,12 @@ function deniedPatternVariants(pattern: string): string[] {
     : [expanded, canonicalPattern];
 }
 
-function withoutTrailingSlash(path: string): string {
+export function withoutTrailingSlash(path: string): string {
   if (path === "/" || /^[A-Za-z]:\/$/.test(path)) return path;
   return path.replace(/\/+$/, "");
 }
 
-function wildcardCanMatchDescendant(root: string, pattern: string): boolean {
+export function wildcardCanMatchDescendant(root: string, pattern: string): boolean {
   const normalizedRoot = withoutTrailingSlash(
     canonicalizeCase(root.replace(/\\/g, "/").normalize("NFC")),
   );
