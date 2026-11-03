@@ -256,3 +256,24 @@ test("a classifier failure blocks as classifier-unavailable and reaches the type
 	);
 	assert.doesNotMatch(JSON.stringify(state), /PROVIDER-TEXT/);
 });
+
+test("the unavailable-classifier block text has no doubled period when the reason already ends in one", async () => {
+	const session = createSession({
+		sessionFile: "/sessions/dot/main.jsonl",
+		sessionId: "dot-main",
+		agent: MAIN,
+		hasUI: true,
+		classifyAction: async () => ({
+			decision: "block",
+			tier: "none",
+			reason: "No classifier model/API key available (model x/y not found); auto mode fails closed.",
+			failure: { kind: "no-classifier" },
+		}),
+	});
+	await session.emit("session_start", { type: "session_start" });
+
+	const result = await session.emit("tool_call", { toolName: "bash", input: { command: "npm test" } }) as { reason?: string };
+
+	assert.match(result.reason ?? "", /fails closed\. This is not a policy denial/);
+	assert.doesNotMatch(result.reason ?? "", /\.\./);
+});
