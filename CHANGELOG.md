@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`permissions.ask` in subagents** — A `permissions.ask` match in a session without UI, such as an OMP subagent, used to block the call. The new `autoMode.headlessAsk` setting chooses what happens: `parent` (default) shows the dialog in the nearest ancestor session of the same process that has a UI, titled with the asking agent's name, and blocks the call when nobody answers within 25 seconds or no ancestor is found; `classifier` skips the question and sends the call to the classifier with a note that the rule matched in a session without UI; `block` keeps the previous behavior. Shared project `.pi/automode.json` cannot set it.
+
 ### Fixed
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
 ## Fork features

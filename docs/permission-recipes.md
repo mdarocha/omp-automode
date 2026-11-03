@@ -161,6 +161,8 @@ If the user must confirm a matching action, use `permissions.ask`:
 
 A confirmation does not create an allow decision. After confirmation, deterministic checks and the classifier still evaluate the call.
 
+A subagent has no UI. By default, a `permissions.ask` match in a subagent shows the dialog in the nearest ancestor session that has one, titled with the subagent's name, and blocks the call if nobody answers within 25 seconds. Set `autoMode.headlessAsk` to `classifier` or `block` to change this. See [Configuration](configuration.md).
+
 If the classifier needs explicit user authorization, answer OMP's built-in `ask` question or send it in a normal chat message. Answers from extension-provided ask tools and timeout auto-selections do not become classifier authorization.
 
 ## Deny commands unconditionally
