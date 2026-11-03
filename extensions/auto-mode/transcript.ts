@@ -1,5 +1,6 @@
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
+  AGENT_ATTRIBUTION,
   agentMessageFromCustomEntry,
   agentMessageFromUserText,
   agentMessageFromWaitDetails,
@@ -9,7 +10,10 @@ import {
 } from "./agent-messages.ts";
 import {
   CHARS_PER_APPROX_TOKEN,
+  DEFAULT_INCLUDE_PARENT_USER_MESSAGES,
   DEFAULT_INCLUDE_TOOL_RESULTS,
+  DEFAULT_MAX_PARENT_USER_TRANSCRIPT_MESSAGES,
+  DEFAULT_MAX_PARENT_USER_TRANSCRIPT_TOKENS,
   DEFAULT_MAX_TOOL_RESULT_TRANSCRIPT_ENTRIES,
   DEFAULT_MAX_TOOL_RESULT_TRANSCRIPT_TOKENS,
   DEFAULT_MAX_TOOL_TRANSCRIPT_CALLS,
@@ -22,6 +26,7 @@ import {
   summarizeToolCall,
   type ToolResultInput,
 } from "./tool-results.ts";
+import { findRootSessionEntries } from "./parent-session.ts";
 import { safeJson, truncateMiddle } from "./utils.ts";
 
 const MAX_USER_ENTRY_TOKENS = 1000;
@@ -32,6 +37,10 @@ const MAX_PINNED_ASK_ANSWERS = 8;
 const MAX_TOOL_ENTRY_TOKENS = 1000;
 const MAX_TOOL_RESULT_ENTRY_TOKENS = 400;
 const USER_SPEAKER = "User";
+const PARENT_USER_SPEAKER = "User (main session)";
+const PARENT_USER_OPEN_TAG = "<parent-session-user-messages>";
+const PARENT_USER_CLOSE_TAG = "</parent-session-user-messages>";
+const OMITTED_ENTRIES_MARKER = "<transcript_entries_omitted />";
 const BACKGROUND_JOB_TOOL = "background-job";
 const UNKNOWN_TOOL = "unknown";
 
@@ -59,6 +68,10 @@ export type ClassifierTranscriptBudgets = {
   includeToolResults?: boolean;
   maxToolResultTokens?: number;
   maxToolResults?: number;
+  /** Under an OMP subagent, add the root session's user messages as their own block. */
+  includeParentUserMessages?: boolean;
+  maxParentUserMessages?: number;
+  maxParentUserTokens?: number;
 };
 
 /** Session entry holding user answers captured from OMP's built-in ask tool. */
@@ -123,9 +136,9 @@ export function askAnswersFromDetails(details: unknown): AskAnswer[] {
   return askAnswer(details);
 }
 
-function capturedAskAnswers(ctx: ExtensionContext): Map<string, AskAnswer[]> {
+function capturedAskAnswers(entries: SessionEntry[]): Map<string, AskAnswer[]> {
   const captured = new Map<string, AskAnswer[]>();
-  for (const entry of ctx.sessionManager.getBranch()) {
+  for (const entry of entries) {
     if (
       entry.type === "custom" && entry.customType === ASK_ANSWER_ENTRY &&
       isAskAnswerEntry(entry.data)
@@ -207,23 +220,41 @@ function truncateToTokenCap(
   };
 }
 
-function collectTranscriptEntries(
-  ctx: ExtensionContext,
-  includeToolResults: boolean,
-): TranscriptEntry[] {
-  const entries: TranscriptEntry[] = [];
-  const sessionManager = ctx.sessionManager as typeof ctx.sessionManager & {
+/** The entries of one session that evidence is collected from. */
+type EntrySource = {
+  /** What the model sees: compaction-aware where the host provides it. */
+  contextEntries: SessionEntry[];
+  /** The whole active branch, which also holds the captured ask answers. */
+  branchEntries: SessionEntry[];
+};
+
+type CollectOptions = {
+  includeToolResults: boolean;
+  /** Keep only what a person typed: human-attributed user messages and verified ask answers. */
+  humanOnly?: boolean;
+};
+
+function sessionEntrySource(sessionManager: ExtensionContext["sessionManager"]): EntrySource {
+  const manager = sessionManager as typeof sessionManager & {
     buildContextEntries?: () => SessionEntry[];
   };
-  const contextEntries = sessionManager.buildContextEntries?.() ??
-    sessionManager.getBranch();
-  const askAnswers = capturedAskAnswers(ctx);
-  const parentId = parentAgentId(ctx);
+  const branchEntries = manager.getBranch();
+  return { contextEntries: manager.buildContextEntries?.() ?? branchEntries, branchEntries };
+}
+
+function collectTranscriptEntries(
+  source: EntrySource,
+  parentId: string | undefined,
+  { includeToolResults, humanOnly = false }: CollectOptions,
+): TranscriptEntry[] {
+  const entries: TranscriptEntry[] = [];
+  const askAnswers = capturedAskAnswers(source.branchEntries);
   const callInputs = new Map<string, unknown>();
   let briefSeen = false;
 
-  for (const [index, entry] of contextEntries.entries()) {
+  for (const [index, entry] of source.contextEntries.entries()) {
     if (entry.type === "custom_message") {
+      if (humanOnly) continue;
       const forwarded = agentMessageFromCustomEntry(entry, parentId);
       const job = forwarded || !includeToolResults ? undefined : backgroundJobResult(entry);
       if (forwarded?.body) {
@@ -258,6 +289,7 @@ function collectTranscriptEntries(
     if (message.role === "user") {
       const text = flattenUserContent(message.content).trim();
       if (!text) continue;
+      if (humanOnly && message.attribution === AGENT_ATTRIBUTION) continue;
       const forwarded = agentMessageFromUserText(text, message.attribution);
       if (forwarded) {
         if (forwarded.body) {
@@ -305,6 +337,7 @@ function collectTranscriptEntries(
         }
         continue;
       }
+      if (humanOnly) continue;
       const forwarded = toolName === "wait"
         ? agentMessageFromWaitDetails(message.details, parentId)
         : undefined;
@@ -339,7 +372,7 @@ function collectTranscriptEntries(
       }
       continue;
     }
-    if (message.role !== "assistant") continue;
+    if (message.role !== "assistant" || humanOnly) continue;
 
     for (const [order, toolCall] of collectAssistantToolCalls(
       message.content,
@@ -479,17 +512,53 @@ function selectResultEntries(
 }
 
 /**
+ * The root session's user messages as their own block, above the agent's own
+ * evidence. Only an OMP subagent has a root session above it, and only what
+ * the user typed or answered there counts: injected messages, coordinator
+ * traffic, tool calls, and tool results of the root stay out.
+ */
+function parentUserBlock(
+  ctx: ExtensionContext,
+  budgets: ClassifierTranscriptBudgets,
+): string | undefined {
+  if (!(budgets.includeParentUserMessages ?? DEFAULT_INCLUDE_PARENT_USER_MESSAGES)) {
+    return undefined;
+  }
+  const rootEntries = findRootSessionEntries(ctx);
+  if (!rootEntries) return undefined;
+  const entries = collectTranscriptEntries(
+    { contextEntries: rootEntries, branchEntries: rootEntries },
+    undefined,
+    { includeToolResults: false, humanOnly: true },
+  ).map((entry) => ({ ...entry, speaker: PARENT_USER_SPEAKER }));
+  const users = selectUserEntries(
+    entries,
+    budgets.maxParentUserTokens ?? DEFAULT_MAX_PARENT_USER_TRANSCRIPT_TOKENS,
+    budgets.maxParentUserMessages ?? DEFAULT_MAX_PARENT_USER_TRANSCRIPT_MESSAGES,
+  );
+  if (users.selected.length === 0) return undefined;
+  return [
+    PARENT_USER_OPEN_TAG,
+    ...users.selected.map((entry) => entry.text),
+    ...(users.omitted ? [OMITTED_ENTRIES_MARKER] : []),
+    PARENT_USER_CLOSE_TAG,
+  ].join("\n");
+}
+
+/**
  * Build classifier evidence from user, coordinator, and peer messages, verified
  * ask answers, assistant tool-call payloads, and bounded untrusted excerpts of
- * recent tool results.
+ * recent tool results. Under an OMP subagent it opens with the root session's
+ * user messages.
  */
 export function buildClassifierTranscript(
   ctx: ExtensionContext,
   budgets: ClassifierTranscriptBudgets,
 ): string {
   const entries = collectTranscriptEntries(
-    ctx,
-    budgets.includeToolResults ?? DEFAULT_INCLUDE_TOOL_RESULTS,
+    sessionEntrySource(ctx.sessionManager),
+    parentAgentId(ctx),
+    { includeToolResults: budgets.includeToolResults ?? DEFAULT_INCLUDE_TOOL_RESULTS },
   );
   const users = selectUserEntries(
     entries,
@@ -514,10 +583,12 @@ export function buildClassifierTranscript(
       index: Number.MAX_SAFE_INTEGER,
       order: 0,
       kind: "tool",
-      text: "<transcript_entries_omitted />",
+      text: OMITTED_ENTRIES_MARKER,
     });
   }
-  return selected.map((entry) => entry.text).join("\n");
+  const lines = selected.map((entry) => entry.text);
+  const parent = parentUserBlock(ctx, budgets);
+  return (parent === undefined ? lines : [parent, ...lines]).join("\n");
 }
 
 export function loadedContextFromSystemPromptOptions(options: unknown): string {

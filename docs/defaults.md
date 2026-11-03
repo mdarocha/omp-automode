@@ -122,6 +122,7 @@ Classifier evidence has separate approximate-token budgets and message-count lim
 - `maxToolTranscriptTokens`: 4000, `maxToolTranscriptCalls`: 40
 - `maxToolResultTranscriptTokens`: 2000, `maxToolResultTranscriptEntries`: 10
 - `includeToolResults`: `true`
+- `maxParentUserTranscriptTokens`: 2000, `maxParentUserTranscriptMessages`: 6, `includeParentUserMessages`: `true` (a subagent's view of the main session's user messages)
 
 The selector pins the first user message (the brief), the newest verified `ask` answers, and the latest message. It fills the remaining space from the newest eligible entries.
 

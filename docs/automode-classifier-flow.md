@@ -341,8 +341,30 @@ User evidence, tool-call evidence, and result evidence have separate budgets. Ea
 | user, coordinator, and peer messages, verified ask answers | `maxUserTranscriptTokens` (4000) | `maxUserTranscriptMessages` (30) | 1000 (brief 2000, ask answer 500) |
 | tool calls | `maxToolTranscriptTokens` (4000) | `maxToolTranscriptCalls` (40) | 1000 |
 | tool results | `maxToolResultTranscriptTokens` (2000) | `maxToolResultTranscriptEntries` (10) | 400 |
+| main-session user messages, for subagents | `maxParentUserTranscriptTokens` (2000) | `maxParentUserTranscriptMessages` (6) | as for user messages |
 
 The first user message (the brief), the newest verified `ask` answers (up to 8), and the latest message are pinned: no budget drops them. Each is capped at half of the token budget, and pinned entries count toward the budgets first. The selector fills the remaining budget from the newest eligible entries. It renders retained evidence in chronological order. It also marks omitted or truncated evidence.
+
+#### Main-session user messages in subagents
+
+A subagent's own transcript holds its brief and coordinator messages. The user's words are in the main session above it. Under OMP, when the session is a subagent (`ctx.agent.kind === "sub"`), the transcript opens with a separate block:
+
+```text
+<parent-session-user-messages>
+User (main session): …
+</parent-session-user-messages>
+User: <the subagent's own brief>
+```
+
+The block holds the root session's human-attributed user messages and its verified `ask` answers. Injected messages, coordinator traffic, tool calls, and tool results of the root stay out. The root's first message and its newest ask answers are pinned in the same way as above, and `includeParentUserMessages: false` removes the block.
+
+The root is found by following each session header's `parentSession` link upward:
+
+1. A registry of the live sessions in this process answers first. A session registers under its file and its id, because a task subagent's header names its parent by file and a `/tan` clone's by id. It registers at `session_start` and again at its first tool call, which covers clones that never get `session_start`.
+2. A hop the registry does not know is read from its session file, read-only. A file larger than 4.25 MB is read from its first 256 KB and last 4 MB. On disk the window holds every branch, not only the active one. A subagent's file sits in the directory named after its parent's file. Pi-automode checks that layout, so a forked main session counts as a root and its source session is not walked.
+3. A chain that cannot be followed (an in-memory parent, a deleted file, a loop) adds no block. Unknown ancestry never becomes user authority.
+
+The policy prompt says these lines can authorize actions inside the agent's delegated task, and that the subagent's own `User:` brief then carries authority only as far as they support it. Hard-deny rules, `deniedPaths`, protected paths, and `permissions` rules run before the classifier and never read the block.
 
 Transcript truncation does not change the dedicated current-action message.
 
