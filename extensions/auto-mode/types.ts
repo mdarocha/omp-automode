@@ -318,6 +318,14 @@ export type ConfigLoadResult = {
   sources?: ConfigSourcePaths;
 };
 
+/** Extra, extension-authored context for the classifier about one action. */
+export type ClassifyHints = {
+  /** Skip the 0/1 gate and send the action straight to the detailed review. */
+  skipFastStage?: boolean;
+  /** Static-analysis findings shown to the classifier beside the action. */
+  notes?: string[];
+};
+
 export type ClassifyAction = (
   ctx: ExtensionContext,
   config: EffectiveConfig,
@@ -327,4 +335,6 @@ export type ClassifyAction = (
   notes?: readonly string[],
   /** Paths the session created earlier; shown to the classifier as provenance evidence. */
   sessionCreatedPaths?: readonly string[],
+  /** Extension-authored analysis of this one action; see {@link ClassifyHints}. */
+  hints?: ClassifyHints,
 ) => Promise<ClassifyResult>;

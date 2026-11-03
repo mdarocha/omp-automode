@@ -40,12 +40,22 @@ import {
 import { classifierCooldowns } from "./classifier-fallback.ts";
 import { analyzeBash, type BashAnalysis } from "./bash.ts";
 import {
+  embeddedNote,
+  evalClassifierHints,
+  evalHardDeny,
+  matchesAllowedEvalPatterns,
+  permissionTargets,
+  prepareEvalChecks,
+  type EvalChecks,
+} from "./eval-checks.ts";
+import {
   AUTO_MODE_GUIDANCE,
   DEFAULT_ALLOW,
   DEFAULT_ENVIRONMENT,
   DEFAULT_HARD_DENY,
   DEFAULT_PROTECTED_PATHS,
   DEFAULT_SOFT_DENY,
+  EVAL_TOOL,
   PATH_BEARING_TOOLS,
   READ_ONLY_TOOLS,
 } from "./constants.ts";
@@ -796,27 +806,32 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
           };
         }
       }
+      const evalChecks: EvalChecks | undefined = event.toolName === EVAL_TOOL
+        ? prepareEvalChecks(input, options.analyzeBash ?? analyzeBash)
+        : undefined;
+      const targets = permissionTargets(event.toolName, input, bashAnalysis, evalChecks);
       if (!isOwnedInspection) state.checkedActions += 1;
 
       for (const pattern of cfg.permissionDeny) {
-        if (
+        const target = targets.find((candidate) =>
           matchesToolPattern(
             pattern,
-            event.toolName,
-            input,
+            candidate.toolName,
+            candidate.input,
             ctx.cwd,
             "match",
-            bashAnalysis,
+            candidate.bashAnalysis,
           )
-        ) {
+        );
+        if (target) {
           const matchedCommand = matchedCommandSummary(
-            matchingBashCommandText(pattern, bashAnalysis),
+            matchingBashCommandText(pattern, target.bashAnalysis),
           );
           if (isOwnedInspection) state.checkedActions += 1;
           return block(ctx, {
             timestamp: Date.now(),
             toolName: event.toolName,
-            reason: `Blocked by permissions.deny: ${pattern.raw}${
+            reason: `Blocked by permissions.deny: ${pattern.raw}${embeddedNote(target)}${
               matchedCommand ? `; matched command: ${matchedCommand}` : ""
             }`,
             action: summary,
@@ -828,20 +843,21 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       let askRequiresClassifier = false;
       const classifierNotes: string[] = [];
       for (const pattern of cfg.permissionAsk) {
-        if (
-          !matchesToolPattern(
+        const target = targets.find((candidate) =>
+          matchesToolPattern(
             pattern,
-            event.toolName,
-            input,
+            candidate.toolName,
+            candidate.input,
             ctx.cwd,
             "match",
-            bashAnalysis,
+            candidate.bashAnalysis,
           )
-        ) {
+        );
+        if (!target) {
           continue;
         }
         const matchedCommand = matchedCommandSummary(
-          matchingBashCommandText(pattern, bashAnalysis),
+          matchingBashCommandText(pattern, target.bashAnalysis),
         );
         const blockAsk = (reason: string) => {
           if (isOwnedInspection) state.checkedActions += 1;
@@ -869,7 +885,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
             : undefined;
           if (!ancestor) {
             return blockAsk(
-              `Matched permissions.ask (${pattern.raw})${
+              `Matched permissions.ask (${pattern.raw})${embeddedNote(target)}${
                 matchedCommand ? ` for command: ${matchedCommand}` : ""
               } but no UI is available${
                 cfg.headlessAsk === "parent" ? " here or in a parent session" : ""
@@ -910,7 +926,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
               timedOut
                 ? `No answer from the parent session within ${FORWARDED_ASK_TIMEOUT_MS / 1000}s for permissions.ask`
                 : "Declined permissions.ask"
-            }: ${pattern.raw}${
+            }: ${pattern.raw}${embeddedNote(target)}${
               matchedCommand ? `; matched command: ${matchedCommand}` : ""
             }`,
           );
@@ -923,7 +939,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         input,
         ctx.cwd,
         bashAnalysis,
-      );
+      ) ?? (evalChecks ? evalHardDeny(evalChecks, ctx.cwd) : undefined);
       if (deterministicReason) {
         if (isOwnedInspection) state.checkedActions += 1;
         return block(ctx, {
@@ -1120,13 +1136,15 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       // Accepted ask rules skip this tier and always reach the classifier.
       if (!askRequiresClassifier) {
         if (
-          matchesAllowedToolPatterns(
-            cfg.permissionAllow,
-            event.toolName,
-            input,
-            ctx.cwd,
-            bashAnalysis,
-          )
+          evalChecks
+            ? matchesAllowedEvalPatterns(cfg.permissionAllow, input, ctx.cwd, evalChecks)
+            : matchesAllowedToolPatterns(
+              cfg.permissionAllow,
+              event.toolName,
+              input,
+              ctx.cwd,
+              bashAnalysis,
+            )
         ) {
           // A protected-path write/edit is never covered by permissions.allow;
           // it stays on the classifier path (same rule as the inside-CWD tier).
@@ -1180,6 +1198,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
           loadedContext,
           classifierNotes,
           state.createdPaths,
+          evalChecks ? evalClassifierHints(evalChecks) : undefined,
         );
       } finally {
         classifierCallsInFlight -= 1;

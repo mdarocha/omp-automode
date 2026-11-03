@@ -837,6 +837,50 @@ test("classifyInStages allows when the fast request fits and returns zero", asyn
 	assert.equal(attempts[0]?.stage, "fast");
 });
 
+test("classifyInStages skips the fast stage when asked and goes straight to the detailed review", async () => {
+	const { fn, calls } = fakeComplete([assistantWithDecision()]);
+	const attempts: ClassifierIoAttempt[] = [];
+	const decision = await classifyInStages(
+		fn,
+		classifierWithContext(),
+		stagedPrompt(),
+		undefined,
+		{
+			sessionId: "pi-automode:test-session",
+			skipFastStage: true,
+			onAttempt: (attempt) => attempts.push(attempt),
+		},
+	);
+
+	assert.equal(decision.decision, "allow");
+	assert.equal(calls.length, 1);
+	assert.ok(calls[0]?.tools, "the only request is the detailed review with the decision tool");
+	assert.deepEqual(attempts.map((attempt) => attempt.stage), ["detailed"]);
+});
+
+test("classifyInStages without skipFastStage still runs the fast stage first", async () => {
+	const { fn, calls } = fakeComplete([assistantWith("0")]);
+	await classifyInStages(
+		fn,
+		classifierWithContext(),
+		stagedPrompt(),
+		undefined,
+		{ sessionId: "pi-automode:test-session", skipFastStage: false },
+	);
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0]?.tools, undefined);
+});
+
+test("analysis notes reach the classifier as an extension-authored block beside the action", () => {
+	const message = buildClassifierActionMessage("the action", ["- opaque: reason"]);
+	const content = message.content as Array<{ text?: string }>;
+	assert.equal(content.length, 3);
+	assert.equal(content[1]?.text, "the action");
+	assert.match(content[2]?.text ?? "", /static analysis of this action/);
+	assert.match(content[2]?.text ?? "", /- opaque: reason/);
+	assert.equal((buildClassifierActionMessage("the action").content as unknown[]).length, 2);
+});
+
 test("Codex classifier requests do not retain session WebSockets", async () => {
 	const { fn, calls } = fakeComplete([assistantWith("1"), assistantWithDecision()]);
 	const classifier = {

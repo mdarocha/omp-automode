@@ -5,6 +5,8 @@ import {
   type BashCommandAnalysis,
   type BashRedirectAnalysis,
 } from "./bash.ts";
+import { EVAL_TOOL } from "./constants.ts";
+import { evalCodeTexts, evalInputLanguage, parseEvalPattern } from "./eval-analysis.ts";
 import type { ToolPattern } from "./types.ts";
 import {
   expandHomePattern,
@@ -82,6 +84,9 @@ export function isMalformedToolPattern(pattern: ToolPattern): boolean {
   if (!pattern.toolName) return true;
   if (pattern.argumentPattern === undefined) return false;
   if (pattern.argumentPattern.trim() === "") return true;
+  if (pattern.toolName === EVAL_TOOL) {
+    return parseEvalPattern(pattern.argumentPattern).codePattern.trim() === "";
+  }
   return pattern.toolName === "bash" &&
     (bashPatternAnalyses.get(pattern)?.errors.length ??
         analyzeBash(pattern.argumentPattern, undefined, "permission-pattern").errors.length) > 0;
@@ -464,6 +469,9 @@ export function matchesToolPattern(
       matchesBashArgumentPattern(argumentPattern, candidate, overflowPolicy)
     );
   }
+  if (toolName === EVAL_TOOL) {
+    return matchesEvalPattern(pattern.argumentPattern, input, overflowPolicy);
+  }
   const argumentPatterns = isPermissionPathTool(toolName)
     ? permissionPathPatternVariants(pattern.argumentPattern, cwd)
     : [pattern.argumentPattern];
@@ -484,6 +492,30 @@ export function matchesToolPattern(
   return overflowPolicy === "match"
     ? primaryGroups.some(groupMatches)
     : primaryGroups.every(groupMatches);
+}
+
+function matchesEvalPattern(
+  argumentPattern: string,
+  input: Record<string, unknown>,
+  overflowPolicy: WildcardOverflowPolicy,
+): boolean {
+  const { language, codePattern } = parseEvalPattern(argumentPattern);
+  if (codePattern.trim() === "") return overflowPolicy === "match";
+  if (language !== undefined) {
+    const inputLanguage = evalInputLanguage(input);
+    // An unrecognized language cannot be proven out of scope: deny/ask rules
+    // still apply, allow rules do not.
+    if (inputLanguage === undefined ? overflowPolicy !== "match" : inputLanguage !== language) {
+      return false;
+    }
+  }
+  const texts = evalCodeTexts(input);
+  if (texts.length === 0) return overflowPolicy === "match";
+  const candidates = texts.length === 1 ? texts : [texts.join("\n"), ...texts];
+  return candidates.some((text) =>
+    matchesWildcardPattern(codePattern, text, overflowPolicy) ||
+    matchesWildcardPattern(codePattern, text.trim(), overflowPolicy)
+  );
 }
 
 /** Return the normalized Bash command that matched a scoped permission rule. */
