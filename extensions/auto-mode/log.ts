@@ -28,6 +28,8 @@ const STAGE_BY_KIND: Partial<Record<DecisionKind, DecisionStage>> = {
   "url-scheme": "url-scheme",
   "permissions.allow": "allow",
   "read-only": "read-only",
+  "read-only-bash": "read-only",
+  "read-only-root": "read-only",
 };
 
 /**

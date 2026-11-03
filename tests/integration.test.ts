@@ -282,3 +282,8 @@ test("the unavailable-classifier block text has no doubled period when the reaso
 test("url-scheme decisions get their own enforcement stage", () => {
 	assert.equal(decisionStage("url-scheme"), "url-scheme");
 });
+
+test("read-only bash and read-only root decisions log the read-only stage", () => {
+	assert.equal(decisionStage("read-only-bash"), "read-only");
+	assert.equal(decisionStage("read-only-root"), "read-only");
+});
