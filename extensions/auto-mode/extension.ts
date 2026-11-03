@@ -99,6 +99,7 @@ import { safeJson, truncateMiddle } from "./utils.ts";
 const INSPECT_TOOL = "automode_inspect";
 /** A reason may already end its sentence; the unavailable notice adds its own. */
 const TRAILING_PERIODS = /\.+$/;
+const EVAL_TOOL = "eval";
 const INSPECTION_ACTIONS = ["status", "config", "defaults", "denials"] as const;
 type InspectionAction = (typeof INSPECTION_ACTIONS)[number];
 
@@ -790,6 +791,9 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         cfg,
         serializeClassifierAction(event.toolName, input),
         loadedContext,
+        // An accepted ask rule demands full classifier review, and eval
+        // runs arbitrary code a probability cannot vouch for.
+        { skipJudge: askRequiresClassifier || event.toolName === EVAL_TOOL },
       );
       logClassifierIo(decision, logCtx);
       if (decision.decision === "allow") {

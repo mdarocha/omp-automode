@@ -1,7 +1,28 @@
-import type { Model } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { JudgeProbabilities } from "./strategy.ts";
 
 export type ExtensionModelRegistry = ExtensionContext["modelRegistry"];
+export type JudgeQuestionId = keyof JudgeProbabilities;
+
+export type JudgeRequest = {
+  registry: ExtensionModelRegistry;
+  sessionModel?: Model<any>;
+  sessionId?: string;
+  /** Lets OMP journal the judge's cost on the session when its manager supports it. */
+  sessionManager?: unknown;
+  state: { context: string; action: string };
+  questions: Record<JudgeQuestionId, { instructions: string }>;
+  signal?: AbortSignal;
+};
+
+export type JudgeOutcome = {
+  /** `provider/id` of the judge model that answered. */
+  model: string;
+  /** Probability that each question's answer is "yes". */
+  probabilities: JudgeProbabilities;
+  usage: AssistantMessage["usage"];
+};
 
 /** OMP-only capabilities. Absent under Pi, where classifier models are `provider/id` only. */
 export type OmpBridge = {
@@ -10,6 +31,12 @@ export type OmpBridge = {
    * then its configured or built-in fallbacks, which may sit on other providers.
    */
   roleChain(role: string, registry: ExtensionModelRegistry): Model<any>[];
+  /**
+   * Answer the four policy questions through OMP's `judge` role chain: native
+   * judges (TypeSafe Jev and similar) and chat models, never on-device models.
+   * Rejects when no candidate can answer.
+   */
+  judge(request: JudgeRequest): Promise<JudgeOutcome>;
 };
 
 let bridge: OmpBridge | undefined;

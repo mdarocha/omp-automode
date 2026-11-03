@@ -28,6 +28,7 @@ import {
 } from "./classifier-fallback.ts";
 import { formatModelSpec, jevModelId } from "./model.ts";
 import { loadOmpBridge } from "./omp.ts";
+import { runJudge } from "./judge.ts";
 import { classifyWithJev } from "./jev.ts";
 import { buildClassifierTranscript } from "./transcript.ts";
 import type {
@@ -778,6 +779,26 @@ export async function classifyInStages(
     };
   }
 
+  return classifyDetailed(completeFn, classifier, prompt, signal, options);
+}
+
+/** Run the detailed review alone, without the one-token gate. */
+export async function classifyDetailed(
+  completeFn: ClassifierCompletionFn,
+  classifier: {
+    model: Model<any>;
+    apiKey?: string;
+    headers?: ProviderHeaders;
+    env?: Record<string, string>;
+  },
+  prompt: {
+    systemPrompt: string;
+    contextMessage: UserMessage;
+    actionMessage: UserMessage;
+  },
+  signal: AbortSignal | undefined,
+  options: StagedClassifierOptions,
+): Promise<ClassificationDecision> {
   const detailedPrompt: ClassifierCompletionContext = {
     systemPrompt: prompt.systemPrompt,
     messages: [
@@ -832,6 +853,7 @@ export const defaultClassifyAction: ClassifyAction = async (
   config,
   action,
   loadedContext,
+  options,
 ): Promise<ClassifyResult> => {
   const systemPrompt = buildClassifierPrompt(config);
   const transcript = buildClassifierTranscript(ctx, {
@@ -846,11 +868,38 @@ export const defaultClassifyAction: ClassifyAction = async (
   if (jevModelId(config.classifierModel)) {
     return classifyWithJev(config, action, contextText, systemPrompt, ctx.signal);
   }
-  const { models, problem } = resolveClassifierModels(
-    ctx,
-    config,
-    await loadOmpBridge(),
-  );
+  const bridge = await loadOmpBridge();
+  const judgeAttempts: ClassifierIoAttempt[] = [];
+  if (config.classifierStrategy === "hybrid" && !options?.skipJudge && bridge) {
+    const judged = await runJudge({
+      bridge,
+      ctx,
+      config,
+      systemPrompt,
+      contextText,
+      action,
+    });
+    judgeAttempts.push(judged.attempt);
+    if (judged.approved) {
+      return {
+        ...judged.approved,
+        io: {
+          model: judged.attempt.model ?? "judge",
+          reasoning: { mode: "server-default" },
+          prompt: {
+            system: systemPrompt,
+            context: contextText,
+            action,
+            fastInstruction: "",
+            detailedInstruction: "",
+          },
+          attempts: judgeAttempts,
+          durationMs: judged.attempt.durationMs,
+        },
+      };
+    }
+  }
+  const { models, problem } = resolveClassifierModels(ctx, config, bridge);
   if (models.length === 0) {
     const reason = `No classifier model/API key available${
       problem ? ` (${problem})` : ""
@@ -899,7 +948,10 @@ export const defaultClassifyAction: ClassifyAction = async (
     }
     const attempts: ClassifierIoAttempt[] = [];
     const started = Date.now();
-    const decision = await classifyInStages(
+    const classify = config.classifierStrategy === "staged"
+      ? classifyInStages
+      : classifyDetailed;
+    const decision = await classify(
       completionPlan.completeFn,
       {
         model: auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model,
@@ -930,8 +982,12 @@ export const defaultClassifyAction: ClassifyAction = async (
     };
   };
 
-  return classifyWithFallback(models, classifyWithModel, {
+  const result = await classifyWithFallback(models, classifyWithModel, {
     budgetMs: config.classifierTimeoutMs * DECISION_BUDGET_TIMEOUTS,
     signal: ctx.signal,
   });
+  // Keep the judge's attempt (and its cost) in the log next to the escalation.
+  return result.io === undefined || judgeAttempts.length === 0
+    ? result
+    : { ...result, io: { ...result.io, attempts: [...judgeAttempts, ...result.io.attempts] } };
 };

@@ -30,6 +30,13 @@ import {
 } from "./constants.ts";
 import { parseClassifierSelector } from "./model.ts";
 import {
+  CLASSIFIER_STRATEGIES,
+  DEFAULT_CLASSIFIER_STRATEGY,
+  DEFAULT_JUDGE_CONFIDENCE,
+  isClassifierStrategy,
+  isJudgeConfidence,
+} from "./strategy.ts";
+import {
   isMalformedToolPattern,
   MAX_WILDCARD_PATTERN_LENGTH,
   parseToolPattern,
@@ -284,6 +291,8 @@ export function validateSettingsFile(
         "classifierReasoningLevel",
         "classifierTimeoutMs",
         "classifyReadOnlyTools",
+        "classifierStrategy",
+        "judgeConfidence",
         "fastClassifierMaxTokens",
         "allowInsideWorkingDirectory",
         "deniedPaths",
@@ -340,6 +349,22 @@ export function validateSettingsFile(
       ) {
         diagnostics.push(
           `${source}: autoMode.classifyReadOnlyTools must be a boolean`,
+        );
+      }
+      if (
+        hasOwn(autoMode, "classifierStrategy") &&
+        !isClassifierStrategy(autoMode.classifierStrategy)
+      ) {
+        diagnostics.push(
+          `${source}: autoMode.classifierStrategy must be one of ${CLASSIFIER_STRATEGIES.join(", ")}`,
+        );
+      }
+      if (
+        hasOwn(autoMode, "judgeConfidence") &&
+        !isJudgeConfidence(autoMode.judgeConfidence)
+      ) {
+        diagnostics.push(
+          `${source}: autoMode.judgeConfidence must be a number above 0.5 and at most 1`,
         );
       }
       if (
@@ -629,6 +654,12 @@ function applyAutoModeScalars(
     classifyReadOnlyTools: typeof settings.classifyReadOnlyTools === "boolean"
       ? settings.classifyReadOnlyTools
       : base.classifyReadOnlyTools,
+    classifierStrategy: isClassifierStrategy(settings.classifierStrategy)
+      ? settings.classifierStrategy
+      : base.classifierStrategy,
+    judgeConfidence: isJudgeConfidence(settings.judgeConfidence)
+      ? settings.judgeConfidence
+      : base.judgeConfidence,
     allowInsideWorkingDirectory:
       typeof settings.allowInsideWorkingDirectory === "boolean"
         ? settings.allowInsideWorkingDirectory
@@ -685,6 +716,8 @@ export function buildEffectiveConfigFromSources(
   let config: EffectiveConfig = {
     enabled: true,
     classifyReadOnlyTools: DEFAULT_CLASSIFY_READ_ONLY_TOOLS,
+    classifierStrategy: DEFAULT_CLASSIFIER_STRATEGY,
+    judgeConfidence: DEFAULT_JUDGE_CONFIDENCE,
     allowInsideWorkingDirectory: DEFAULT_ALLOW_INSIDE_WORKING_DIRECTORY,
     deniedPaths: [...DEFAULT_DENIED_PATHS],
     fastClassifierMaxTokens: DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
