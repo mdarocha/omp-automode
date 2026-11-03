@@ -5,6 +5,7 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -69,6 +70,7 @@ import {
   statusLine,
   statusText,
 } from "./state.ts";
+import { deniedGrepResultFiles, narrowGrepSearch } from "./search-scope.ts";
 import { gateUrlSchemePath } from "./url-schemes.ts";
 import {
   ASK_ANSWER_ENTRY,
@@ -255,6 +257,9 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       return pi.getAllTools().find((tool) => tool.name === name)
         ?.sourceInfo.path === `<builtin:${name}>`;
     }
+
+    /** Revised `grep` input per tool call: denied paths excluded from the search. */
+    const narrowedSearchInputs = new Map<string, Record<string, unknown>>();
 
     function persist(): void {
       pi.appendEntry(STATE_ENTRY, {
@@ -443,7 +448,25 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       return { systemPrompt: `${event.systemPrompt}\n\n${AUTO_MODE_GUIDANCE}` };
     });
 
-    pi.on("tool_result", (event) => {
+    pi.on("tool_result", (event, ctx) => {
+      // A narrowed grep must not report a denied file. If OMP did not honour the
+      // exclusions, or the result does not list its files, drop the result.
+      if (narrowedSearchInputs.delete(event.toolCallId) && !event.isError) {
+        const denied = deniedGrepResultFiles(
+          event.details,
+          ctx.cwd,
+          effectiveConfig().deniedPaths,
+        );
+        if (denied === undefined || denied.length > 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "[pi-automode] The search result was dropped because it could not be verified against deniedPaths.",
+            }],
+            isError: true,
+          };
+        }
+      }
       if (event.toolName !== "ask" || event.isError || event.parentToolCallId) return undefined;
       // Only OMP's built-in ask shows the question to the user. A same-named
       // extension tool could invent an answer, so it never counts as consent.
@@ -457,7 +480,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       return undefined;
     });
 
-    pi.on("tool_call", async (event, ctx) => {
+    async function evaluateToolCall(event: ToolCallEvent, ctx: ExtensionContext) {
       // Enforcement order:
       // 1. permission deny/ask rules,
       // 2. deterministic hard-deny checks that never consult the model,
@@ -719,13 +742,22 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
                   cfg.deniedPaths,
                 ));
             if (deniedSearchScope) {
-              return block(ctx, {
-                timestamp: Date.now(),
-                toolName: event.toolName,
-                reason: `Search scope can contain a path denied by policy: ${policyPath}`,
-                action: summary,
-                kind: "deterministic-path-deny",
-              }, logCtx);
+              // OMP's built-in grep reads `!glob` list entries as exclusions, so a
+              // search that can reach a denied path runs without those files.
+              // Anything else, or a pattern the exclusions cannot express, blocks.
+              const narrowed = event.toolName === "grep" && ownsBuiltinTool("grep")
+                ? narrowGrepSearch(input, ctx.cwd, cfg.deniedPaths)
+                : undefined;
+              if (narrowed === undefined) {
+                return block(ctx, {
+                  timestamp: Date.now(),
+                  toolName: event.toolName,
+                  reason: `Search scope can contain a path denied by policy: ${policyPath}`,
+                  action: summary,
+                  kind: "deterministic-path-deny",
+                }, logCtx);
+              }
+              narrowedSearchInputs.set(event.toolCallId, narrowed);
             }
           }
           if (cfg.allowInsideWorkingDirectory) {
@@ -859,6 +891,17 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         action: summary,
         kind: "classifier",
       }, logCtx);
+    }
+
+    pi.on("tool_call", async (event, ctx) => {
+      narrowedSearchInputs.delete(event.toolCallId);
+      const result = await evaluateToolCall(event, ctx);
+      if (result !== undefined) return result;
+      const revised = narrowedSearchInputs.get(event.toolCallId);
+      // OMP runs the call with the returned `input`; the field is OMP-only.
+      return revised
+        ? ({ input: revised } as unknown as { block?: boolean })
+        : undefined;
     });
 
     pi.registerTool({
