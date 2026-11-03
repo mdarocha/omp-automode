@@ -222,6 +222,17 @@ export const DEFAULT_ALLOW_INSIDE_WORKING_DIRECTORY = false;
 /** Default path deny list: empty (no built-in secrets list). */
 export const DEFAULT_DENIED_PATHS: string[] = [];
 
+/**
+ * Default behavior: every bash command reaches the classifier unless a
+ * permission rule allows it. When enabled, commands that are provably pure
+ * reads (allowlisted binaries and flags, static words, no writes, no command
+ * execution, every path acceptable to `deniedPaths`) skip the classifier.
+ */
+export const DEFAULT_ALLOW_READ_ONLY_BASH = false;
+
+/** Default read-only roots: none. Reads outside the working directory are not auto-allowed. */
+export const DEFAULT_READ_ONLY_ROOTS: string[] = [];
+
 /** Default observability log config: off, classifier I/O off. */
 export const DEFAULT_LOG_CONFIG = {
   enabled: false,

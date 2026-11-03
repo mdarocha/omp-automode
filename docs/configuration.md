@@ -74,6 +74,8 @@ Example:
     "classifierTimeoutMs": 20000,
     "allowInsideWorkingDirectory": false,
     "deniedPaths": [],
+    "allowReadOnlyBash": false,
+    "readOnlyRoots": [],
     "maxUserTranscriptTokens": 4000,
     "maxToolTranscriptTokens": 4000,
     "environment": [
@@ -102,6 +104,52 @@ Example:
 `maxUserTranscriptTokens` and `maxToolTranscriptTokens` are approximate budgets for each category. Both default to 4000 and accept integers of at least 32.
 
 Pi-automode does not support the former `maxTranscriptLines` field. Evidence selection now uses token budgets instead of line counts.
+
+## Read-only Bash and read-only roots
+
+Two opt-in settings let provably read-only calls skip the classifier. Both are off by default. Only global configuration, trusted project-local `.pi/automode.local.json`, and `PI_AUTOMODE_SETTINGS_JSON` can set them. Shared project `.pi/automode.json` cannot, because both settings widen what runs without review.
+
+### `allowReadOnlyBash`
+
+With `allowReadOnlyBash: true`, a Bash command skips the classifier when static analysis shows that it only reads files. Everything the analysis cannot prove goes through the normal pipeline. The tier runs after `permissions.deny`, `permissions.ask`, deterministic hard-deny checks, and the `deniedPaths` gate, so none of them is weakened. An accepted `permissions.ask` rule still sends the call to the classifier.
+
+A command qualifies when all of these hold:
+
+- It is a list of simple commands joined by `|`, `&&`, `||`, or `;`. Loops, functions, subshells, `case`, background jobs, negation, `time`, here-documents, and here-strings are not accepted.
+- Every word is static. Command and process substitution, variables, globs, brace expansion, and `~user` are rejected. `~`, `$HOME`, and `${HOME}` are accepted only at the start of a word.
+- It has no environment-assignment prefix such as `A=1 cmd`.
+- Redirects are limited to `/dev/null`, descriptor duplication such as `2>&1`, and `< file`.
+- Each command is on a fixed allowlist, and every flag is on that command's own allowlist. An unknown flag rejects the command. The allowlist is `ls`, `cat`, `head`, `tail`, `wc`, `file`, `stat`, `pwd`, `echo`, `printf`, `true`, `grep`, `egrep`, `fgrep`, `rg`, `sed`, `jq`, `find`, `git`, `which`, `type`, `tree`, `du`, `df`, `date`, `uname`, `id`, `whoami`, `sort`, `uniq`, `cut`, `tr`, `nl`, `column`, `basename`, `dirname`, `realpath`, `readlink`, `diff`, `cmp`, and the `*sum` checksum tools.
+- Flags that write or run another program are on no list: `sed -i`, `sed` scripts with `w`, `e`, or `r`, `sort -o`, `find -exec`, `-delete`, and `-fprint*`, `rg --pre` and `-z`, `git -c`, `--output`, `--ext-diff`, and `--textconv`, and `file -C`. Pagers, `env`, `xargs`, `awk`, `tee`, interpreters, and shells are not allowlisted.
+- `sed` accepts only `p`, `d`, `q`, `=`, and plain `s///` scripts. `jq` rejects `env`, `$ENV`, and module directives. `git` accepts only read subcommands (`status`, `log`, `show`, `diff`, `blame`, `rev-parse`, `rev-list`, `branch --list`, `tag --list`, `ls-files`, `ls-tree`, `describe`, `merge-base`, `for-each-ref`, `show-ref`, `remote -v`, `worktree list`, and `config --get <key>`), `-C <dir>`, `--no-pager`, and `--no-optional-locks`. It rejects signature placeholders that run `gpg` and config keys that hold credentials.
+- A single leading `cd /absolute/path` is accepted, alone or followed by `&&`. Statements after a `;` are checked in both the old and the new directory, because the `cd` can fail.
+- Every path argument, option value, redirect source, and `cd` target is resolved against the working directory, following symlinks one component at a time, and checked against `deniedPaths` and the safety-control paths. It must not reach `/proc`, `/dev` (except `/dev/null`), or `/sys`. Recursive commands (`grep -r`, `rg`, `find`, `du`, `tree`, `ls -R`, `git diff`, `git log`, `git show`, `git blame`) also fail when the search scope can contain a denied path, or when it starts at `/`. `ls -RL`, `tree -l`, and `diff -r` without `--no-dereference` are rejected because they follow symlinks out of the checked scope.
+- Arguments that look like URLs (`skill://`, `local://`, `ssh://`, `file://`, …) are rejected. The shell can map some schemes to files or hosts.
+- A `cwd` argument on the Bash tool is resolved and checked like a `cd` target. A `cwd` that is not a plain local path sends the call to the classifier.
+
+When `allowInsideWorkingDirectory` is on, file tools reach the classifier outside the working directory. Read-only Bash follows the same rule: every path must be inside the working directory or a `readOnlyRoots` entry. `classifyReadOnlyTools` does not affect this tier. Leave `allowReadOnlyBash` off if every read must be reviewed.
+
+#### Limits
+
+The analysis is a static allowlist and gives no sandbox guarantee.
+
+- Reads are limited by `deniedPaths` only. A secret that is not listed there, such as a token in a project file, is readable and its content reaches the model. List sensitive locations in `deniedPaths`.
+- The check happens before the command runs. A file or symlink that changes in between is not detected.
+- `git` runs with the repository's own configuration. A repository whose `.git/config` sets `diff.external`, a `textconv` driver, or `core.fsmonitor` can run a program during `git status`, `git diff`, `git log -p`, `git show`, or `git blame`. `git status` and `git diff` can also refresh `.git/index`.
+- Flag tables follow GNU coreutils, ripgrep, and git. A different implementation of the same name, a shell function, or an alias that shadows an allowlisted binary in the session shell is not detected.
+- `git remote -v` and `git config --get remote.<name>.url` print remote URLs, which can embed credentials.
+
+### `readOnlyRoots`
+
+`readOnlyRoots` is a list of absolute directories, default `[]`. A `read`, `grep`, `find`, or `ls` call whose path is inside one of them skips the classifier, even outside the working directory. Typical entries are scratch and cache trees such as `/tmp`, `~/.omp/wt`, and `/nix/store`.
+
+- `write` and `edit` never use roots.
+- `deniedPaths` still blocks a matching path. Protected and safety-control paths, such as `.git/config` or `.pi/automode.json` inside a root, still reach the classifier.
+- Paths are compared after symlink resolution, so a link inside a root that points outside it does not qualify. A root that is itself a symlink is resolved, and one that resolves to a protected location is ignored. Comparison is case-sensitive; a different spelling falls back to the classifier.
+- Entries accept `~`, `$HOME`, and `${HOME}`. Pi-automode reports and ignores entries that are relative, contain `*` or `..`, or name `/`, the home directory or one of its ancestors, a system root such as `/etc`, `/usr`, `/var`, `/home`, or anything under `/proc`, `/sys`, `/dev`, `/etc`, or `/root`.
+- A `grep` or `find` path that lists several targets (`a;b`), contains a glob, or is a URL does not use roots.
+- `$defaults` is accepted and means nothing. Entries accumulate across configuration sources.
+- Roots apply whether or not `classifyReadOnlyTools` is set.
 
 ## Ask-user tools and explicit authorization
 

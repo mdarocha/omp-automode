@@ -50,6 +50,10 @@ export type AutoModeSettings = {
   allowInsideWorkingDirectory?: boolean;
   /** Path glob patterns (file tools) that are always denied before the classifier. Supports `~` and `*` (matches any characters, including `/`). */
   deniedPaths?: unknown;
+  /** When true, bash commands that are provably pure reads skip the classifier. Never read from shared project config. */
+  allowReadOnlyBash?: boolean;
+  /** Absolute directories outside the working directory where read/grep/find/ls skip the classifier. Supports `~` and `$HOME`. Never read from shared project config. */
+  readOnlyRoots?: unknown;
   maxUserTranscriptTokens?: number;
   maxToolTranscriptTokens?: number;
   environment?: unknown;
@@ -96,6 +100,8 @@ export type EffectiveConfig = {
   classifierTimeoutMs: number;
   allowInsideWorkingDirectory: boolean;
   deniedPaths: string[];
+  allowReadOnlyBash: boolean;
+  readOnlyRoots: string[];
   maxUserTranscriptTokens: number;
   maxToolTranscriptTokens: number;
   environment: string[];
@@ -138,6 +144,8 @@ export type DecisionKind =
   | DenialRecord["kind"]
   | "permissions.allow"
   | "read-only"
+  | "read-only-bash"
+  | "read-only-root"
   | "inside-working-directory";
 
 export type ClassificationDecision = {

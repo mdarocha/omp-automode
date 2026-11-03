@@ -154,6 +154,8 @@ export function baseConfig(overrides: Partial<EffectiveConfig> = {}): EffectiveC
 		classifyReadOnlyTools: false,
 		allowInsideWorkingDirectory: false,
 		deniedPaths: [],
+		allowReadOnlyBash: false,
+		readOnlyRoots: [],
 		fastClassifierMaxTokens: 512,
 		classifierTimeoutMs: 20_000,
 		maxUserTranscriptTokens: 4000,
