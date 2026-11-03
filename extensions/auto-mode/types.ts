@@ -117,6 +117,8 @@ export type AutoModeState = {
   classifierAllowed: number;
   classifierDenied: number;
   recentDenials: DenialRecord[];
+  /** Absolute paths this session's allowed, successful calls created, newest last. */
+  createdPaths: string[];
 };
 
 export type DenialRecord = {
@@ -205,4 +207,6 @@ export type ClassifyAction = (
   config: EffectiveConfig,
   action: string,
   loadedContext: string,
+  /** Paths the session created earlier; shown to the classifier as provenance evidence. */
+  sessionCreatedPaths?: readonly string[],
 ) => Promise<ClassifyResult>;
