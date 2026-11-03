@@ -1,9 +1,10 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DENIAL_HISTORY_LIMIT } from "./constants.ts";
+import { restoreCreatedPaths } from "./provenance.ts";
 import type { AutoModeState, DenialRecord, EffectiveConfig } from "./types.ts";
 import { safeJson, truncateMiddle } from "./utils.ts";
 
-/** Session entry holding counters, recent denials, and the `/automode on|off` choice. */
+/** Session entry holding counters, recent denials, created paths, and the `/automode on|off` choice. */
 export const STATE_ENTRY = "pi-automode-state";
 
 /**
@@ -132,7 +133,7 @@ export function actionSummary(
 export type PersistedState = AutoModeState & { enabledOverride?: boolean };
 
 export function initialState(): AutoModeState {
-  return { checkedActions: 0, blockedActions: 0, classifierAllowed: 0, classifierDenied: 0, recentDenials: [] };
+  return { checkedActions: 0, blockedActions: 0, classifierAllowed: 0, classifierDenied: 0, recentDenials: [], createdPaths: [] };
 }
 
 export function restoreState(ctx: ExtensionContext): {
@@ -164,6 +165,7 @@ export function restoreState(ctx: ExtensionContext): {
         recentDenials: Array.isArray(entry.data.recentDenials)
           ? entry.data.recentDenials.slice(-DENIAL_HISTORY_LIMIT)
           : [],
+        createdPaths: restoreCreatedPaths(entry.data.createdPaths),
       },
       enabledOverride: entry.data.enabledOverride,
     };

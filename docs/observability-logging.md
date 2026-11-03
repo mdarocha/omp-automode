@@ -126,7 +126,7 @@ The entry follows all related classifier-usage `message` entries. It precedes th
 | `model` | classifier model, for example `anthropic/claude-haiku-4` |
 | `reasoning` | `server-default`, or the explicit requested and effective model-supported level |
 | `prompt.system` | the full system policy with `environment`/`allow`/`soft_deny`/`hard_deny` rules interpolated |
-| `prompt.context` | the shared context message: loaded project instructions + classifier transcript |
+| `prompt.context` | the shared context message: loaded project instructions + classifier transcript, plus the `<session-created-paths>` block when the session has created paths |
 | `prompt.action` | the complete, untruncated current tool action JSON |
 | `prompt.fastInstruction` | the exact one-token filter instruction |
 | `prompt.detailedInstruction` | the exact structured-review instruction |
@@ -146,7 +146,7 @@ The array records both stages, retries, and fail-closed cases. A fast allow has 
 
 ## Privacy
 
-`prompt.context` contains project instructions and transcript evidence for both classifier stages. `prompt.action` contains the separate, untruncated current action. Pi-automode logs the final stage instructions separately.
+`prompt.context` contains project instructions, transcript evidence, and up to 30 paths that the session created, for both classifier stages. `prompt.action` contains the separate, untruncated current action. Pi-automode logs the final stage instructions separately.
 
 See [Auto-mode classifier flow → What is sent to the classifier](automode-classifier-flow.md#what-is-sent-to-the-classifier) for the evidence assembly rules.
 

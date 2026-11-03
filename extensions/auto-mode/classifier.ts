@@ -18,6 +18,7 @@ import {
 } from "./constants.ts";
 import { formatModelSpec, jevModelId, parseModelSpec } from "./model.ts";
 import { classifyWithJev } from "./jev.ts";
+import { formatSessionCreatedPaths } from "./provenance.ts";
 import { buildClassifierTranscript } from "./transcript.ts";
 import type {
   ClassificationDecision,
@@ -854,17 +855,19 @@ export const defaultClassifyAction: ClassifyAction = async (
   config,
   action,
   loadedContext,
+  sessionCreatedPaths = [],
 ): Promise<ClassifyResult> => {
   const systemPrompt = buildClassifierPrompt(config);
   const transcript = buildClassifierTranscript(ctx, {
     maxUserTokens: config.maxUserTranscriptTokens,
     maxToolTokens: config.maxToolTranscriptTokens,
   });
+  const createdPaths = formatSessionCreatedPaths(sessionCreatedPaths);
   const contextText = `<loaded-project-instructions>\n${
     loadedContext || "(none)"
   }\n</loaded-project-instructions>\n\n<classifier-transcript>\n${
     transcript || "(none)"
-  }\n</classifier-transcript>`;
+  }\n</classifier-transcript>${createdPaths && `\n\n${createdPaths}`}`;
   if (jevModelId(config.classifierModel)) {
     return classifyWithJev(config, action, contextText, systemPrompt, ctx.signal);
   }

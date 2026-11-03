@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Paths created by the session reach the classifier** — Auto mode now records the paths that the session's own `mkdir`, `mktemp`, `git clone`, `gh repo clone`, `git worktree add`, and new-file `write` calls created. It lists up to 30 of them in a `<session-created-paths>` block after the transcript. Cleaning up such a path no longer looks like deleting files that existed before the session, even after the creating call left the transcript window. A call is recorded only after it was allowed and returned without an error, and only for paths that did not exist before it ran. The last 100 paths persist in the `pi-automode-state` entry and survive `/resume`. The list is evidence for the classifier only: it does not bypass `permissions.deny`, hard-deny checks, `deniedPaths`, protected paths, or the classifier's other deny rules.
+
 ### Fixed
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
 ## Fork features
