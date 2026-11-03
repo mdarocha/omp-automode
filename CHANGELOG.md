@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Agent Hub entry on OMP** — Each session registers a read-only `<agent>-automode` entry (`main-automode`, `Pr32Drawbacks-automode`) in OMP's Agent Hub (`/hub`). It shows `running` with the action being classified, and rests as `parked` with the latest decision. The entry is an advisor, so it stays out of IRC rosters and the running-subagent badge, and it is removed at session shutdown. Pi has no hub and is unaffected
 ### Fixed
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
 ## Fork features
