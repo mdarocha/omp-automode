@@ -1,6 +1,13 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DENIAL_HISTORY_LIMIT } from "./constants.ts";
-import type { AutoModeState, DenialRecord, EffectiveConfig } from "./types.ts";
+import { CLASSIFIER_ERROR_HISTORY_LIMIT, DENIAL_HISTORY_LIMIT } from "./constants.ts";
+import type {
+  AgentIdentity,
+  AutoModeState,
+  ClassifierErrorRecord,
+  DenialRecord,
+  EffectiveConfig,
+  EnabledSource,
+} from "./types.ts";
 import { safeJson, truncateMiddle } from "./utils.ts";
 
 /** Session entry holding counters, recent denials, and the `/automode on|off` choice. */
@@ -11,7 +18,11 @@ export const STATE_ENTRY = "pi-automode-state";
  * spawns. `value` stays undefined until the user picks one, so the configured
  * `enabled` applies.
  */
-export type EnabledOverride = { value?: boolean };
+export type EnabledOverride = {
+  value?: boolean;
+  /** Session that created this object. Any other session holding it inherited the choice. */
+  owner?: string;
+};
 
 // OMP runs the extension factory again for each subagent, so closure state is
 // per session and a subagent would otherwise keep blocking after the user ran
@@ -53,7 +64,7 @@ export function bindEnabledOverride(
     ? ctx.sessionManager.getHeader?.()?.parentSession
     : undefined;
   const override = (parent ? enabledOverrideBySessionKey.get(parent) : undefined) ??
-    { value: persisted };
+    { value: persisted, owner: ctx.sessionManager.getSessionId?.() };
   for (const key of sessionKeys(ctx)) {
     enabledOverrideBySessionKey.set(key, override);
   }
@@ -78,6 +89,45 @@ export function pushDenial(state: AutoModeState, denial: DenialRecord): void {
     ...state.recentDenials.slice(-(DENIAL_HISTORY_LIMIT - 1)),
     denial,
   ];
+}
+
+export function pushClassifierError(
+  state: AutoModeState,
+  error: ClassifierErrorRecord,
+): void {
+  state.recentClassifierErrors = [
+    ...state.recentClassifierErrors.slice(-(CLASSIFIER_ERROR_HISTORY_LIMIT - 1)),
+    error,
+  ];
+}
+
+/**
+ * Where the effective `enabled` value came from. `/automode on|off` wins over
+ * config. A choice the session did not make itself was inherited from the
+ * agent that spawned it.
+ */
+export function enabledSource(
+  config: EffectiveConfig,
+  override: EnabledOverride,
+  sessionId: string | undefined,
+): EnabledSource {
+  if (override.value === undefined) return config.enabledSource ?? "default";
+  return override.owner !== undefined && override.owner !== sessionId
+    ? "parent"
+    : "override";
+}
+
+/** The host's identity for the running agent. Pi has no `ctx.agent`, so this is OMP-only. */
+export function agentIdentity(ctx: ExtensionContext): AgentIdentity | undefined {
+  const agent: unknown = "agent" in ctx ? ctx.agent : undefined;
+  if (typeof agent !== "object" || agent === null) return undefined;
+  const { kind, id, name, depth } = agent as Record<string, unknown>;
+  return {
+    kind: typeof kind === "string" ? kind : undefined,
+    id: typeof id === "string" ? id : undefined,
+    name: typeof name === "string" ? name : undefined,
+    depth: typeof depth === "number" ? depth : undefined,
+  };
 }
 
 /** Icon for themes that expose no glyphs, such as Pi's. */
@@ -135,6 +185,7 @@ export function statusText(
     `soft_deny entries: ${config.softDeny.length}`,
     `hard_deny entries: ${config.hardDeny.length}`,
     `last decision: ${state.lastDecision ?? "none"}`,
+    `last decision kind: ${state.lastDecisionKind ?? "none"}`,
     `last reason: ${state.lastReason ?? "none"}`,
   ].join("\n");
 }
@@ -166,7 +217,14 @@ export function actionSummary(
 export type PersistedState = AutoModeState & { enabledOverride?: boolean };
 
 export function initialState(): AutoModeState {
-  return { checkedActions: 0, blockedActions: 0, classifierAllowed: 0, classifierDenied: 0, recentDenials: [] };
+  return {
+    checkedActions: 0,
+    blockedActions: 0,
+    classifierAllowed: 0,
+    classifierDenied: 0,
+    recentDenials: [],
+    recentClassifierErrors: [],
+  };
 }
 
 export function restoreState(ctx: ExtensionContext): {
@@ -191,12 +249,16 @@ export function restoreState(ctx: ExtensionContext): {
       state: {
         lastDecision: entry.data.lastDecision,
         lastReason: entry.data.lastReason,
+        lastDecisionKind: entry.data.lastDecisionKind,
         checkedActions: entry.data.checkedActions ?? 0,
         blockedActions: entry.data.blockedActions ?? 0,
         classifierAllowed: entry.data.classifierAllowed ?? 0,
         classifierDenied: entry.data.classifierDenied ?? 0,
         recentDenials: Array.isArray(entry.data.recentDenials)
           ? entry.data.recentDenials.slice(-DENIAL_HISTORY_LIMIT)
+          : [],
+        recentClassifierErrors: Array.isArray(entry.data.recentClassifierErrors)
+          ? entry.data.recentClassifierErrors.slice(-CLASSIFIER_ERROR_HISTORY_LIMIT)
           : [],
       },
       enabledOverride: entry.data.enabledOverride,

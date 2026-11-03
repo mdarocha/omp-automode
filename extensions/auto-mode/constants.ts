@@ -60,6 +60,7 @@ export const DEFAULT_PROTECTED_PATHS = [
 export const DEFAULT_MAX_USER_TRANSCRIPT_TOKENS = 4000;
 export const DEFAULT_MAX_TOOL_TRANSCRIPT_TOKENS = 4000;
 export const DENIAL_HISTORY_LIMIT = 12;
+export const CLASSIFIER_ERROR_HISTORY_LIMIT = 12;
 
 /** Per-request timeout for classifier completions (fast and detailed stages). */
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 20_000;

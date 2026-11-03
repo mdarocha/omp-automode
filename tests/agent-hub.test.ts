@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-	agentIdentity,
+	hubAgentIdentity,
 	createHubEntry,
 	createPiAutomode,
 	globalHubRegistry,
@@ -53,11 +53,11 @@ test("hubAgentId names the main agent by name and subagents by spawn id", () => 
 	assert.equal(hubAgentId(SUB), "Pr32Drawbacks-automode");
 });
 
-test("agentIdentity reads OMP's ctx.agent and rejects anything else", () => {
-	assert.deepEqual(agentIdentity({ agent: MAIN }), MAIN);
-	assert.equal(agentIdentity({}), undefined);
-	assert.equal(agentIdentity({ agent: null }), undefined);
-	assert.equal(agentIdentity({ agent: { kind: "main" } }), undefined);
+test("hubAgentIdentity reads OMP's ctx.agent and rejects anything else", () => {
+	assert.deepEqual(hubAgentIdentity({ agent: MAIN }), MAIN);
+	assert.equal(hubAgentIdentity({}), undefined);
+	assert.equal(hubAgentIdentity({ agent: null }), undefined);
+	assert.equal(hubAgentIdentity({ agent: { kind: "main" } }), undefined);
 });
 
 test("globalHubRegistry is undefined without pi.pi.AgentRegistry (Pi)", () => {

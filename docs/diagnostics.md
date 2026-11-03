@@ -10,7 +10,7 @@ The tool accepts one `action` value.
 
 | Action | Purpose | Result |
 | --- | --- | --- |
-| `status` | Inspect active state and counters. | A readable status summary and the enabled override, last decision, and action counters. |
+| `status` | Inspect active state and counters. | A readable status summary; the enabled override and where the enabled state came from; the last decision and its kind; action counters; the agent identity and `hasUI`; and recent classifier errors. |
 | `config` | Inspect the effective configuration. | The active configuration, the resolved observability log path, and configuration diagnostics. |
 | `defaults` | Inspect built-in rule lists. | The built-in environment, allow, protected-path, soft-deny, and hard-deny lists. |
 | `denials` | Find recent rejected actions. | Reverse-chronological timestamps, enforcement kinds, and tool names. |
@@ -26,17 +26,28 @@ An inspection call is not an unrestricted escape hatch.
 3. Deterministic hard-deny checks run next.
 4. The extension bypasses classifier routing only for its own registered `automode_inspect` tool.
 
-If a local check blocks the call, pi-automode records it as a blocked action. If the call passes, inspection does not change counters, state, or logs.
+If a local check blocks the call, pi-automode records it as a blocked action. If the call passes, inspection does not change counters or state. With logging enabled, a passing call writes one `read-only` decision entry.
 
 The extension verifies the registered tool source before it applies the bypass. A tool from another extension with the same name does not receive this exemption.
 
 The tool cannot enable or disable auto mode, reload configuration, reset state, select a model, or edit configuration. The user must run the related `/automode` command directly.
 
+## Status fields
+
+| Field | Meaning |
+| --- | --- |
+| `state.lastDecisionKind` | Enforcement path of the last decision: the `kind` values in [observability logging](observability-logging.md#decision). |
+| `enabledSource` | Where the effective enabled state came from: `default`, `global`, `project-local`, or `inline` (the config scope that set `autoMode.enabled`); `override` (`/automode on\|off` in this session); or `parent` (a subagent following its parent's `/automode on\|off`). |
+| `agent` | `{ kind, id, name, depth }` from the host. OMP reports it. Pi reports none, so the field is absent. |
+| `hasUI` | Whether this session has an interactive UI. A headless session blocks `permissions.ask` matches. |
+| `state.recentClassifierErrors` | The last 12 fail-closed classifier failures, newest first: `{ kind, stage, timestamp, model, retryAfterMs? }`. Kinds are `rate-limit`, `timeout`, `auth`, `server`, `aborted`, `provider`, `invalid-response`, `context-limit`, and `no-classifier`. |
+
 ## Model-visible data
 
 Pi sends tool output to the current model. The output has deliberate privacy limits:
 
-- `status` does not include the last decision reason.
+- `status` includes the kind of the last decision (for example `classifier` or `deterministic-hard-deny`), but not its reason.
+- `status` lists recent classifier errors as a typed `kind`, `stage`, `timestamp`, `model`, and `retryAfterMs` when the provider gave one. It never includes the provider's error text or payloads.
 - `denials` does not include denial reasons or action payloads.
 - `config` removes configuration-parser details from invalid JSON diagnostics.
 

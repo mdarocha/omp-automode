@@ -19,6 +19,7 @@ import {
 import { formatModelSpec, jevModelId, parseModelSpec } from "./model.ts";
 import { classifyWithJev } from "./jev.ts";
 import { buildClassifierTranscript } from "./transcript.ts";
+import { classifyProviderError } from "./classifier-errors.ts";
 import type {
   ClassificationDecision,
   ClassifyAction,
@@ -26,6 +27,7 @@ import type {
   ClassifierReasoning,
   ClassifierReasoningLevel,
   ClassifierReasoningLog,
+  ClassifierStage,
   ClassifyResult,
   EffectiveClassifierReasoningLevel,
   EffectiveConfig,
@@ -595,6 +597,7 @@ function responseAttempt(
 function classifierFailure(
   response: AssistantMessage,
   label: "Classifier" | "Fast classifier",
+  stage: ClassifierStage,
   retryLength = false,
   allowToolUse = false,
 ): ClassificationDecision | undefined {
@@ -616,6 +619,10 @@ function classifierFailure(
     reason: `${label} failed; auto mode fails closed: ${
       response.errorMessage || fallback
     }`,
+    failure: {
+      ...classifyProviderError(response.errorMessage, response.stopReason),
+      stage,
+    },
   };
 }
 
@@ -677,10 +684,11 @@ export async function classifyWithRetry(
         decision: "block",
         tier: "none",
         reason: `Classifier failed; auto mode fails closed: ${message}`,
+        failure: { ...classifyProviderError(message), stage },
       };
     }
     const durationMs = Date.now() - started;
-    const failure = classifierFailure(response, "Classifier", true, true);
+    const failure = classifierFailure(response, "Classifier", stage, true, true);
     const decision = response.stopReason === "toolUse"
       ? parseClassifierDecision(response)
       : undefined;
@@ -694,7 +702,12 @@ export async function classifyWithRetry(
         ? "Classifier response was truncated before producing a valid classifier decision tool call; auto mode fails closed."
         : "Classifier response did not contain a valid classifier decision tool call; auto mode fails closed.";
   }
-  return { decision: "block", tier: "none", reason: lastReason };
+  return {
+    decision: "block",
+    tier: "none",
+    reason: lastReason,
+    failure: { kind: "invalid-response", stage },
+  };
 }
 
 /** Run the one-token conservative gate, then detailed review only when requested. */
@@ -733,7 +746,12 @@ export async function classifyInStages(
     fastPrompt,
   );
   if (fastLimitReason) {
-    return { decision: "block", tier: "none", reason: fastLimitReason };
+    return {
+      decision: "block",
+      tier: "none",
+      reason: fastLimitReason,
+      failure: { kind: "context-limit", stage: "fast" },
+    };
   }
 
   const fastStarted = Date.now();
@@ -773,11 +791,12 @@ export async function classifyInStages(
       decision: "block",
       tier: "none",
       reason: `Fast classifier failed; auto mode fails closed: ${message}`,
+      failure: { ...classifyProviderError(message), stage: "fast" },
     };
   }
 
   const fastText = extractAssistantText(fastResponse, false).trim();
-  const failure = classifierFailure(fastResponse, "Fast classifier");
+  const failure = classifierFailure(fastResponse, "Fast classifier", "fast");
   options.onAttempt?.(
     responseAttempt(
       "fast",
@@ -802,6 +821,7 @@ export async function classifyInStages(
       tier: "none",
       reason:
         "Fast classifier response was not 0 or 1 after trimming whitespace; auto mode fails closed.",
+      failure: { kind: "invalid-response", stage: "fast" },
     };
   }
 
@@ -823,7 +843,12 @@ export async function classifyInStages(
     detailedPrompt,
   );
   if (detailedLimitReason) {
-    return { decision: "block", tier: "none", reason: detailedLimitReason };
+    return {
+      decision: "block",
+      tier: "none",
+      reason: detailedLimitReason,
+      failure: { kind: "context-limit", stage: "detailed" },
+    };
   }
 
   return classifyWithRetry(
@@ -884,6 +909,7 @@ export const defaultClassifyAction: ClassifyAction = async (
       decision: "block",
       tier: "none",
       reason: "No classifier model/API key available; auto mode fails closed.",
+      failure: { kind: "no-classifier" },
       reasoning: resolution.reasoning,
     };
   }

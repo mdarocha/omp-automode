@@ -35,7 +35,7 @@ export type HubRegistry = {
   unregister(id: string, expected?: HubRef): boolean;
 };
 
-export type AgentIdentity = {
+export type HubAgent = {
   kind: string;
   id: string;
   name: string;
@@ -53,7 +53,7 @@ export type HubEntry = {
 };
 
 /** OMP's `ctx.agent`, validated. Absent on Pi. */
-export function agentIdentity(ctx: object): AgentIdentity | undefined {
+export function hubAgentIdentity(ctx: object): HubAgent | undefined {
   const agent = "agent" in ctx ? ctx.agent : undefined;
   if (typeof agent !== "object" || agent === null) {
     return undefined;
@@ -66,7 +66,7 @@ export function agentIdentity(ctx: object): AgentIdentity | undefined {
 }
 
 /** `main-automode` for the main agent, `<spawn id>-automode` for subagents. */
-export function hubAgentId(agent: AgentIdentity): string {
+export function hubAgentId(agent: HubAgent): string {
   return `${agent.kind === "main" ? agent.name : agent.id}${HUB_ID_SUFFIX}`;
 }
 
@@ -98,7 +98,7 @@ export function hubActivityText(label: string, toolName: string, summary: string
 
 export function createHubEntry(
   registry: HubRegistry,
-  agent: AgentIdentity,
+  agent: HubAgent,
 ): HubEntry {
   const id = hubAgentId(agent);
   let classifying = 0;
