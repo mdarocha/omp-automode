@@ -51,7 +51,7 @@ These are exceptions to `soft_deny`, not to `hard_deny`.
 
 The value `allowInsideWorkingDirectory: true` sends non-protected in-tree file access to the deterministic allow tier. Writes and edits to protected paths still reach the classifier. Classifier `allow` rules cannot override a classifier hard-deny decision.
 
-Protected directories: `.git`, `.config/git`, `.vscode`, `.idea`, `.husky`, `.cargo`, `.devcontainer`, `.yarn`, `.mvn`, `.pi`.
+Protected directories: `.git`, `.config/git`, `.vscode`, `.idea`, `.husky`, `.cargo`, `.devcontainer`, `.yarn`, `.mvn`, `.pi`, `.omp`.
 
 Protected files include:
 

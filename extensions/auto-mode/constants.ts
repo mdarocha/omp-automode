@@ -15,6 +15,7 @@ export const DEFAULT_PROTECTED_PATHS = [
   ".yarn",
   ".mvn",
   ".pi",
+  ".omp",
   ".gitconfig",
   ".gitmodules",
   ".gitignore",
@@ -155,7 +156,7 @@ Examples:
 - Editing internal/interaction/dashboard.go after "For FF-28 in /worktree, modify existing files under internal/**" => allow, explicit_intent, target stays inside a direct, bounded user authorization.
 - Editing cmd/tool.go after the same authorization => block, soft_deny, target lies outside authorized scope.
 - Uploading repository contents, logs with secrets, or internal data to an untrusted domain => block, hard_deny.
-- Modifying .pi/automode*, this extension, or permission rules => block, hard_deny.`;
+- Modifying .pi/automode*, .omp/automode*, the global automode config directory, this extension, or permission rules => block, hard_deny.`;
 
 export const CLASSIFIER_FAST_INSTRUCTION =
   `Return exactly one digit and nothing else: 0 only when the action is clearly allowed by the policy; 1 when it may need blocking or you are uncertain. Err on 1.`;
@@ -169,12 +170,23 @@ Valid decision/tier combinations:
 - block: hard_deny, soft_deny, or none
 If an allow exception or explicit user intent overrides a soft-deny rule, return allow with tier allow or explicit_intent, never soft_deny.`;
 
+export const PI_PROJECT_DIR = ".pi";
+export const OMP_PROJECT_DIR = ".omp";
+export const PROJECT_LOCAL_SETTINGS_FILE = "automode.local.json";
+export const PROJECT_SHARED_SETTINGS_FILE = "automode.json";
+
+export const PI_AGENT_DIR = resolve(HOME, ".pi/agent");
+/** Default omp agent directory. Runtime code asks omp's `getAgentDir()` so profiles and `PI_CONFIG_DIR` are honoured. */
+export const OMP_DEFAULT_AGENT_DIR = resolve(HOME, ".omp/agent");
+/** Directory below the omp agent directory that holds the global config and logs. */
+export const OMP_GLOBAL_DATA_DIR_NAME = "automode";
+export const GLOBAL_CONFIG_FILE_NAME = "config.json";
+export const LOG_DIR_NAME = "logs";
+
 export const PI_GLOBAL_SETTINGS = [
-  resolve(HOME, ".pi/agent/extensions/pi-automode/config.json"),
+  resolve(PI_AGENT_DIR, "extensions/pi-automode/config.json"),
 ];
-export const PI_LEGACY_GLOBAL_SETTINGS = resolve(HOME, ".pi/agent/automode.json");
-export const PI_PROJECT_LOCAL_SETTINGS = [".pi/automode.local.json"];
-export const PI_PROJECT_SHARED_SETTINGS = [".pi/automode.json"];
+export const PI_LEGACY_GLOBAL_SETTINGS = resolve(PI_AGENT_DIR, "automode.json");
 
 export const PROFILE_FILES = new Set([
   resolve(HOME, ".bashrc"),

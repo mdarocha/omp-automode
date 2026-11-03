@@ -459,7 +459,7 @@ function segmentHardDeny(
       "sd",
       "sed",
     ].includes(name) &&
-    /\.pi\/automode|\.pi\/extensions|pi-automode|auto-mode\.json/i.test(
+    /\.(?:pi|omp)\/automode|\.(?:pi|omp)\/extensions|\.omp\/agent\/(?:automode|extensions)|pi-automode|auto-mode\.json/i.test(
       segment.raw,
     )
   ) {
