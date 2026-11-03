@@ -1,4 +1,6 @@
 import {
+  constants as fsConstants,
+  copyFileSync,
   existsSync,
   linkSync,
   lstatSync,
@@ -25,8 +27,9 @@ import {
   MAX_CLASSIFIER_TIMEOUT_MS,
   PI_GLOBAL_SETTINGS,
   PI_LEGACY_GLOBAL_SETTINGS,
-  PI_PROJECT_LOCAL_SETTINGS,
-  PI_PROJECT_SHARED_SETTINGS,
+  PI_PROJECT_DIR,
+  PROJECT_LOCAL_SETTINGS_FILE,
+  PROJECT_SHARED_SETTINGS_FILE,
 } from "./constants.ts";
 import { parseModelSpec } from "./model.ts";
 import {
@@ -60,6 +63,8 @@ export type PrepareGlobalConfigOptions = {
   legacyPath?: string;
   moveFile?: (source: string, destination: string) => void;
   unlinkFile?: (path: string) => void;
+  /** Hard-link primitive for the default move. Overridden in tests. */
+  linkFile?: (source: string, destination: string) => void;
 };
 
 function sameFileIdentity(firstPath: string, secondPath: string): boolean {
@@ -88,12 +93,47 @@ function cleanupPublishedDestination(
   }
 }
 
+/**
+ * Publish a copy of `source` at `destination` without overwriting an existing
+ * file. The copy goes to a temporary file in the destination directory first,
+ * then a hard link (same filesystem, fails if the destination exists) makes it
+ * appear in one step, so a reader never sees a partial config.
+ */
+function copyFileWithoutOverwrite(
+  source: string,
+  destination: string,
+  linkFile: (source: string, destination: string) => void,
+  unlinkFile: (path: string) => void,
+): void {
+  const temporary = `${destination}.${process.pid}.tmp`;
+  try {
+    copyFileSync(source, temporary, fsConstants.COPYFILE_EXCL);
+    linkFile(temporary, destination);
+  } finally {
+    try {
+      unlinkFile(temporary);
+    } catch {
+      // The temporary file is absent when the copy never started.
+    }
+  }
+}
+
 function moveFileWithoutOverwrite(
   source: string,
   destination: string,
+  linkFile: (source: string, destination: string) => void,
   unlinkFile: (path: string) => void,
 ): void {
-  linkSync(source, destination);
+  try {
+    linkFile(source, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
+      throw error;
+    }
+    // The agent directory is on another filesystem, so a hard link is
+    // impossible. Publish a copy instead, then remove the legacy file.
+    copyFileWithoutOverwrite(source, destination, linkFile, unlinkFile);
+  }
   try {
     unlinkFile(source);
   } catch (error) {
@@ -145,6 +185,7 @@ export function prepareGlobalConfig(
   const currentExists = existsSync(currentPath);
   const legacyExists = existsSync(legacyPath);
   const unlinkFile = options.unlinkFile ?? unlinkSync;
+  const linkFile = options.linkFile ?? linkSync;
 
   if (currentExists && legacyExists) {
     if (!sameFileIdentity(currentPath, legacyPath)) {
@@ -180,7 +221,7 @@ export function prepareGlobalConfig(
     mkdirSync(dirname(currentPath), { recursive: true });
     const moveFile = options.moveFile ??
       ((source: string, destination: string) =>
-        moveFileWithoutOverwrite(source, destination, unlinkFile));
+        moveFileWithoutOverwrite(source, destination, linkFile, unlinkFile));
     moveFile(legacyPath, currentPath);
     return {
       status: "migrated",
@@ -796,11 +837,48 @@ function ignoredSharedAllowDiagnostics(
   });
 }
 
+type ProjectSettingsSelection = {
+  /** Path that is read when the project is trusted. */
+  path: string;
+  /** Every location that could hold this file, most preferred first. */
+  candidates: string[];
+  diagnostics: string[];
+};
+
+/**
+ * Choose the project settings file for one file name. The first config
+ * directory that holds the file wins. A later directory is a legacy location:
+ * it is used only when the preferred one lacks the file, and never moved.
+ */
+function selectProjectSettingsPath(
+  cwd: string,
+  fileName: string,
+  projectConfigDirs: string[],
+): ProjectSettingsSelection {
+  const candidates = projectConfigDirs.map((dir) => resolve(cwd, dir, fileName));
+  const preferred = candidates[0] ?? resolve(cwd, PI_PROJECT_DIR, fileName);
+  const existing = candidates.filter(existsSync);
+  const [active, ...ignored] = existing;
+  if (active === undefined) {
+    return { path: preferred, candidates, diagnostics: [] };
+  }
+  const diagnostics = ignored.map((path) =>
+    `${path}: ignored because ${active} exists`
+  );
+  if (active !== preferred) {
+    diagnostics.push(
+      `${active}: using legacy project config location; move it to ${preferred}`,
+    );
+  }
+  return { path: active, candidates, diagnostics };
+}
+
 /** Load config from disk and environment variables, including diagnostics for `/automode config`. Project files require explicit trust. */
 export function loadEffectiveConfigWithDiagnostics(
   cwd: string,
   projectTrusted = false,
   globalSettingsPath = PI_GLOBAL_SETTINGS[0],
+  projectConfigDirs: string[] = [PI_PROJECT_DIR],
 ): ConfigLoadResult {
   const inlineSettings: SettingsFile[] = [];
   const diagnostics: string[] = [];
@@ -823,23 +901,28 @@ export function loadEffectiveConfigWithDiagnostics(
   }
 
   const globalFiles = [readSettingsFile(globalSettingsPath)];
-  const projectLocalPaths = PI_PROJECT_LOCAL_SETTINGS.map((file) =>
-    resolve(cwd, file)
+  const projectLocal = selectProjectSettingsPath(
+    cwd,
+    PROJECT_LOCAL_SETTINGS_FILE,
+    projectConfigDirs,
   );
-  const projectSharedPaths = PI_PROJECT_SHARED_SETTINGS.map((file) =>
-    resolve(cwd, file)
+  const projectShared = selectProjectSettingsPath(
+    cwd,
+    PROJECT_SHARED_SETTINGS_FILE,
+    projectConfigDirs,
   );
   const projectLocalFiles = projectTrusted
-    ? projectLocalPaths.map(readSettingsFile)
+    ? [readSettingsFile(projectLocal.path)]
     : [];
   const projectSharedFiles = projectTrusted
-    ? projectSharedPaths.map(readSettingsFile)
+    ? [readSettingsFile(projectShared.path)]
     : [];
-  if (!projectTrusted) {
+  if (projectTrusted) {
+    diagnostics.push(...projectLocal.diagnostics, ...projectShared.diagnostics);
+  } else {
     for (
-      const path of [...projectLocalPaths, ...projectSharedPaths].filter(
-        existsSync,
-      )
+      const path of [...projectLocal.candidates, ...projectShared.candidates]
+        .filter(existsSync)
     ) {
       diagnostics.push(`${path}: ignored because project is not trusted`);
     }
@@ -865,6 +948,11 @@ export function loadEffectiveConfigWithDiagnostics(
       ...sharedAllowDiagnostics,
       ...diagnostics,
     ],
+    sources: {
+      global: globalSettingsPath,
+      projectLocal: projectLocal.path,
+      projectShared: projectShared.path,
+    },
   };
 }
 
@@ -873,11 +961,13 @@ export function loadEffectiveConfig(
   cwd: string,
   projectTrusted = false,
   globalSettingsPath = PI_GLOBAL_SETTINGS[0],
+  projectConfigDirs: string[] = [PI_PROJECT_DIR],
 ): EffectiveConfig {
   return loadEffectiveConfigWithDiagnostics(
     cwd,
     projectTrusted,
     globalSettingsPath,
+    projectConfigDirs,
   ).config;
 }
 

@@ -195,9 +195,18 @@ export type SettingsSources = {
   inlineSettings?: SettingsFile[];
 };
 
+/** Settings files selected by the last config load. */
+export type ConfigSourcePaths = {
+  global: string;
+  projectLocal: string;
+  projectShared: string;
+};
+
 export type ConfigLoadResult = {
   config: EffectiveConfig;
   diagnostics: string[];
+  /** Absent when config loading is overridden. */
+  sources?: ConfigSourcePaths;
 };
 
 export type ClassifyAction = (
