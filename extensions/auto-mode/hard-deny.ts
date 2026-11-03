@@ -131,7 +131,7 @@ function normalizeRootCandidate(value: string): string | undefined {
  * below an empty-string prefix match, and `TMPDIR=/private` made
  * `/private/etc/**` disposable.
  */
-function conflictsWithProtectedRoots(candidate: string, home: string): boolean {
+export function conflictsWithProtectedRoots(candidate: string, home: string): boolean {
   if (candidate === "/") return true;
   for (const protectedRoot of ["/", home, ...SYSTEM_ROOTS]) {
     const canonical = resolve(protectedRoot);

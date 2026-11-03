@@ -59,6 +59,10 @@ export type AutoModeSettings = {
   headlessAsk?: HeadlessAskMode;
   /** Path glob patterns (file tools) that are always denied before the classifier. Supports `~` and `*` (matches any characters, including `/`). */
   deniedPaths?: unknown;
+  /** When true, bash commands that are provably pure reads skip the classifier. Never read from shared project config. */
+  allowReadOnlyBash?: boolean;
+  /** Absolute directories outside the working directory where read/grep/find/ls skip the classifier. Supports `~` and `$HOME`. Never read from shared project config. */
+  readOnlyRoots?: unknown;
   maxUserTranscriptTokens?: number;
   maxToolTranscriptTokens?: number;
   /** Keep at most this many ordinary user, coordinator, and peer messages (default 30). Pinned entries are exempt. */
@@ -116,6 +120,8 @@ export type EffectiveConfig = {
   allowInsideWorkingDirectory: boolean;
   headlessAsk: HeadlessAskMode;
   deniedPaths: string[];
+  allowReadOnlyBash: boolean;
+  readOnlyRoots: string[];
   maxUserTranscriptTokens: number;
   maxToolTranscriptTokens: number;
   maxUserTranscriptMessages: number;
@@ -171,6 +177,8 @@ export type DecisionKind =
   | DenialRecord["kind"]
   | "permissions.allow"
   | "read-only"
+  | "read-only-bash"
+  | "read-only-root"
   | "inside-working-directory"
   | "url-scheme";
 

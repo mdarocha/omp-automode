@@ -175,6 +175,8 @@ The list does not govern `bash`. The classifier and deterministic hard-deny chec
 
 The value `allowInsideWorkingDirectory: true` allows file access inside the working directory locally. Pi-automode sends all outside file access to the classifier, including reads.
 
+Two opt-in settings let provably read-only calls skip the classifier. `allowReadOnlyBash: true` (default `false`) allows Bash commands that static analysis shows only read files: allowlisted binaries and flags, static words, no redirects except `/dev/null`, no substitutions, and every path checked against `deniedPaths`. `readOnlyRoots` (default `[]`) lists absolute directories, such as `/tmp` or `~/.omp/wt`, where `read`, `grep`, `find`, and `ls` skip the classifier outside the working directory. Only user-owned configuration can set them. Neither setting provides a sandbox. See [Read-only Bash and read-only roots](docs/configuration.md#read-only-bash-and-read-only-roots) for the allowlist and its limits.
+
 For Pi/OMP chat models, classification starts with a conservative one-token filter. If the filter requests review, pi-automode requests one internal `classifier_decision` tool call.
 
 The tool exists only in the nested classifier request. It is not registered with `pi.registerTool()`, and the main agent cannot call it.

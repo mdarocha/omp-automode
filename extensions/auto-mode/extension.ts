@@ -92,10 +92,13 @@ import {
   matchingBashCommandText,
   recursiveSearchMayReachDeniedPath,
 } from "./permissions.ts";
+import { analyzeReadOnlyBash, readOnlyBashPolicy } from "./read-only-bash.ts";
+import { isInsideReadOnlyRoot, isPlainFilePath } from "./read-only-roots.ts";
 import {
   extractInputPath,
   isInside,
   isProtectedPath,
+  isSafetyControlPath,
   registerOmpAgentDir,
   resolvePathForPolicy,
   resolveToolInputPath,
@@ -744,8 +747,9 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       // 3. extension-owned read-only inspection tool,
       // 4. deterministic path denials,
       // 5. accepted ask rules force classifier review and skip all allow tiers,
-      // 6. inside-CWD, permissions.allow, and read-only allow tiers,
-      // 7. classifier for every remaining action, fail-closed on setup/parse errors.
+      // 6. inside-CWD, permissions.allow, read-only-root, and read-only allow tiers,
+      // 7. read-only bash allow tier (`allowReadOnlyBash`),
+      // 8. classifier for every remaining action, fail-closed on setup/parse errors.
       ensureSession(ctx);
       const cfg = effectiveConfig();
       if (!cfg.enabled) return undefined;
@@ -1009,7 +1013,8 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         }
       }
       if (
-        (cfg.deniedPaths.length > 0 || cfg.allowInsideWorkingDirectory) &&
+        (cfg.deniedPaths.length > 0 || cfg.allowInsideWorkingDirectory ||
+          cfg.readOnlyRoots.length > 0) &&
         PATH_BEARING_TOOLS.has(event.toolName)
       ) {
         const inputPath = urlGate
@@ -1079,6 +1084,32 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
               }
               narrowedSearchInputs.set(event.toolCallId, narrowed);
             }
+          }
+          // Read-only roots skip the classifier outside the cwd; protected paths do not.
+          if (
+            !askRequiresClassifier &&
+            READ_ONLY_TOOLS.has(event.toolName) &&
+            isPlainFilePath(inputPath) &&
+            targets.every(({ policyPath }) =>
+              isInsideReadOnlyRoot(policyPath, cfg.readOnlyRoots) &&
+              !isSafetyControlPath(policyPath, ctx.cwd) &&
+              !isProtectedPath(
+                policyPath,
+                resolvePathForPolicy(ctx.cwd) ?? ctx.cwd,
+                cfg.protectedPaths,
+              )
+            )
+          ) {
+            return allow(
+              ctx,
+              "read-only-root",
+              `Path inside read-only root: ${
+                targets.map(({ policyPath }) => policyPath).join(", ")
+              }`,
+              event.toolName,
+              summary,
+              logCtx,
+            );
           }
           if (cfg.allowInsideWorkingDirectory) {
             const policyCwd = resolvePathForPolicy(ctx.cwd) ?? ctx.cwd;
@@ -1172,6 +1203,27 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
               logCtx,
             );
           }
+        }
+      }
+
+      // Opt-in tier for pure-read bash; anything not provably read-only goes to the classifier.
+      if (
+        !askRequiresClassifier &&
+        cfg.allowReadOnlyBash &&
+        event.toolName === "bash" &&
+        typeof input.command === "string"
+      ) {
+        const policy = readOnlyBashPolicy(cfg, input, ctx.cwd);
+        const verdict = policy && analyzeReadOnlyBash(input.command, policy);
+        if (verdict?.readOnly) {
+          return allow(
+            ctx,
+            "read-only-bash",
+            `Read-only shell command: ${verdict.commands.join(", ")}`,
+            event.toolName,
+            summary,
+            logCtx,
+          );
         }
       }
 

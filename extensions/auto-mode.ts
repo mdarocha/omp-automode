@@ -29,6 +29,8 @@ export * from "./auto-mode/paths.ts";
 export * from "./auto-mode/permissions.ts";
 export * from "./auto-mode/provenance.ts";
 export * from "./auto-mode/search-scope.ts";
+export * from "./auto-mode/read-only-roots.ts";
+export * from "./auto-mode/read-only-bash.ts";
 export * from "./auto-mode/state.ts";
 export * from "./auto-mode/tool-results.ts";
 export * from "./auto-mode/transcript.ts";
