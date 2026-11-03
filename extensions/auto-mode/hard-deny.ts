@@ -229,62 +229,142 @@ export function isRootHomeOrSystemPath(
   );
 }
 
-function possibleBashWorkingDirectories(
+const MAX_TRACKED_DIRECTORIES = 64;
+
+/** `undefined` means the working directory cannot be determined. */
+type WorkingDirectories = ReadonlySet<string> | undefined;
+
+type WorkingDirectoryTrace = {
+  /** Directories each command can start in, parallel to `analysis.commands`. */
+  before: WorkingDirectories[];
+  /** Directories reachable once the whole script has run. */
+  final: WorkingDirectories;
+};
+
+const LEADING_VARIABLE =
+  /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))(?=\/|$)/;
+const DIRECTORY_VARIABLES: ReadonlyArray<string> = ["PWD", "OLDPWD"];
+
+type TokenPath = {
+  path?: string;
+  /** The token is relative and the working directory is unknown. */
+  unresolved: boolean;
+};
+
+/**
+ * Resolve a shell path token against one possible working directory.
+ *
+ * A token that starts with a variable other than `PWD`/`OLDPWD`, such as
+ * `$d/out.yml` after `d=$(mktemp -d)`, does not depend on the working
+ * directory, so an unknown directory cannot make it dangerous. It is checked as
+ * if the variable were empty, which keeps `"$d"/` and `$d/../etc` hard-denied.
+ * With a known directory it stays a plain relative path, as before.
+ */
+function resolveTokenPath(
+  token: string,
+  cwd: string | undefined,
+  shellText = token,
+): TokenPath {
+  const path = shellPathTokenToPath(token, cwd, shellText);
+  if (path || cwd !== undefined) return { path, unresolved: false };
+  const match = LEADING_VARIABLE.exec(token);
+  const variable = match?.[1] ?? match?.[2];
+  if (!match || !variable || DIRECTORY_VARIABLES.includes(variable)) {
+    return { unresolved: true };
+  }
+  const suffix = token.slice(match[0].length);
+  return {
+    path: suffix.startsWith("/") ? resolve(suffix) : undefined,
+    unresolved: false,
+  };
+}
+
+/** Directories after `segment` runs, or `undefined` when they become unknown. */
+function advanceWorkingDirectories(
+  directories: ReadonlySet<string>,
+  segment: BashCommandAnalysis,
+): WorkingDirectories {
+  const command = segment.effectiveCommand;
+  const name = command.name;
+  if (
+    segment.dynamicName || command.unresolvedTransparentDispatch ||
+    segment.words.some((word) => /^(HOME|CDPATH|PWD|OLDPWD)=/.test(word)) ||
+    name === "pushd" || name === "popd" || name === "." || name === "source" ||
+    (name === "eval" && segment.dynamicShellScript)
+  ) {
+    return undefined;
+  }
+  if (name !== "cd") return directories;
+  if (segment.dynamic) return undefined;
+  let index = 0;
+  while (["-L", "-P", "-e"].includes(command.args[index] ?? "")) index++;
+  if (command.args[index] === "--") index++;
+  const target = command.args[index] ?? HOME;
+  const text = command.argTexts[index] ?? target;
+  if (
+    command.args.length > index + 1 || target === "-" ||
+    target.startsWith("-") || hasUnquotedPathnameExpansion(text)
+  ) {
+    return undefined;
+  }
+  const next = new Set(directories);
+  const absolute = shellPathTokenToPath(target, undefined, text);
+  if (absolute) {
+    next.add(absolute);
+    next.add(resolvePathForPolicy(absolute) ?? absolute);
+  } else {
+    // A loop or function can run a relative cd any number of times, so its
+    // targets have no finite set. An absolute cd lands in the same directory
+    // on every pass.
+    if (segment.repeated) return undefined;
+    // CDPATH can redirect bare relative names outside the apparent directory.
+    if (target !== "." && target !== ".." &&
+      !target.startsWith("./") && !target.startsWith("../")) return undefined;
+    for (const previous of directories) {
+      const destination = shellPathTokenToPath(target, previous, text);
+      if (!destination) return undefined;
+      next.add(destination);
+      next.add(resolvePathForPolicy(destination) ?? destination);
+      if (next.size > MAX_TRACKED_DIRECTORIES) return undefined;
+    }
+  }
+  return next.size > MAX_TRACKED_DIRECTORIES ? undefined : next;
+}
+
+/**
+ * Replay the script's directory changes in source order. A command sees the
+ * directories reachable before it, so an unresolved `cd` or `eval` only affects
+ * the commands that follow it. Commands in loops and functions can run again
+ * after any later command, so they see the directories reachable at the end.
+ */
+function traceBashWorkingDirectories(
   analysis: BashAnalysis,
   cwd: string,
-): Set<string> | undefined {
-  const directories = new Set([cwd]);
-  // A loop or function can run a relative cd any number of times, so those
-  // targets have no finite set. An absolute cd lands in the same directory on
-  // every pass, and this set already ignores ordering.
-  const repeatedScope = analysis.structure.some((token) =>
-    /^node:(While|Until|For|Select|ArithmeticFor|Function)(:|$)/.test(token)
-  );
+): WorkingDirectoryTrace {
+  const before: WorkingDirectories[] = [];
+  let current: WorkingDirectories = new Set([cwd]);
   for (const segment of analysis.commands) {
-    const command = segment.effectiveCommand;
-    const name = command.name;
-    if (
-      segment.dynamicName || command.unresolvedTransparentDispatch ||
-      segment.words.some((word) => /^(HOME|CDPATH|PWD|OLDPWD)=/.test(word)) ||
-      name === "pushd" || name === "popd" || name === "." || name === "source" ||
-      (name === "eval" && segment.dynamicShellScript)
-    ) {
-      return undefined;
-    }
-    if (name !== "cd") continue;
-    if (segment.dynamic) return undefined;
-    let index = 0;
-    while (["-L", "-P", "-e"].includes(command.args[index] ?? "")) index++;
-    if (command.args[index] === "--") index++;
-    const target = command.args[index] ?? HOME;
-    const text = command.argTexts[index] ?? target;
-    if (
-      command.args.length > index + 1 || target === "-" ||
-      target.startsWith("-") || hasUnquotedPathnameExpansion(text)
-    ) {
-      return undefined;
-    }
-    const absolute = shellPathTokenToPath(target, undefined, text);
-    if (absolute) {
-      directories.add(absolute);
-      directories.add(resolvePathForPolicy(absolute) ?? absolute);
-    } else {
-      if (repeatedScope) return undefined;
-      // CDPATH can redirect bare relative names outside the apparent directory.
-      if (target !== "." && target !== ".." &&
-        !target.startsWith("./") && !target.startsWith("../")) return undefined;
-      const previousDirectories = [...directories];
-      for (const previous of previousDirectories) {
-        const next = shellPathTokenToPath(target, previous, text);
-        if (!next) return undefined;
-        directories.add(next);
-        directories.add(resolvePathForPolicy(next) ?? next);
-        if (directories.size > 64) return undefined;
-      }
-    }
-    if (directories.size > 64) return undefined;
+    before.push(current);
+    current = current && advanceWorkingDirectories(current, segment);
   }
-  return directories;
+  return {
+    before: before.map((directories, index) =>
+      analysis.commands[index]?.repeated ? current : directories
+    ),
+    final: current,
+  };
+}
+
+function firstDirectoryHardDeny(
+  directories: WorkingDirectories,
+  check: (directory: string | undefined) => string | undefined,
+): string | undefined {
+  if (!directories) return check(undefined);
+  for (const directory of directories) {
+    const reason = check(directory);
+    if (reason) return reason;
+  }
+  return undefined;
 }
 
 function redirectHardDeny(
@@ -292,13 +372,12 @@ function redirectHardDeny(
   cwd: string | undefined,
   policyCwd: string,
 ): string | undefined {
-  const path = shellPathTokenToPath(target, cwd);
-  if (!path) {
-    if (cwd === undefined) {
-      return "relative Bash redirect after an unresolved directory change is hard-denied";
-    }
-    return undefined;
+  const resolved = resolveTokenPath(target, cwd);
+  if (resolved.unresolved) {
+    return "relative Bash redirect after an unresolved directory change is hard-denied";
   }
+  const path = resolved.path;
+  if (!path) return undefined;
   const profileReason = isProfileOrAuthorizedKeysPath(path);
   if (profileReason) return profileReason;
   if (isSafetyControlPath(path, policyCwd)) {
@@ -392,10 +471,11 @@ function segmentHardDeny(
         if (isUnresolvedUserHomeToken(shellText, tildeExpansion)) {
           return "irreversible deletion of a user-home expansion is hard-denied";
         }
-        const path = shellPathTokenToPath(arg, cwd, shellText);
-        if (!path && cwd === undefined) {
+        const resolved = resolveTokenPath(arg, cwd, shellText);
+        if (resolved.unresolved) {
           return "relative recursive deletion after an unresolved directory change is hard-denied";
         }
+        const path = resolved.path;
         const policyPath = path ? (resolvePathForPolicy(path) ?? path) : undefined;
         const policyHome = resolvePathForPolicy(HOME) ?? HOME;
         if (policyPath && isRootHomeOrSystemPath(policyPath, policyHome)) {
@@ -408,10 +488,11 @@ function segmentHardDeny(
   if (name === "find" && lowerArgs.includes("-delete")) {
     let rootIndex = 0;
     while (["-H", "-L", "-P"].includes(args[rootIndex] ?? "")) rootIndex++;
-    const root = shellPathTokenToPath(args[rootIndex] ?? "", cwd);
-    if (!root && cwd === undefined) {
+    const resolvedRoot = resolveTokenPath(args[rootIndex] ?? "", cwd);
+    if (resolvedRoot.unresolved) {
       return "relative find deletion after an unresolved directory change is hard-denied";
     }
+    const root = resolvedRoot.path;
     const policyRoot = root ? (resolvePathForPolicy(root) ?? root) : undefined;
     const policyHome = resolvePathForPolicy(HOME) ?? HOME;
     if (
@@ -425,10 +506,11 @@ function segmentHardDeny(
 
   if (["chmod", "chown"].includes(name)) {
     for (const arg of args.filter((arg) => !arg.startsWith("-"))) {
-      const path = shellPathTokenToPath(arg, cwd);
-      if (!path && cwd === undefined) {
+      const resolved = resolveTokenPath(arg, cwd);
+      if (resolved.unresolved) {
         return "relative permission mutation after an unresolved directory change is hard-denied";
       }
+      const path = resolved.path;
       if (
         path &&
         (path.startsWith("/etc/") ||
@@ -499,30 +581,23 @@ export function deterministicHardDeny(
   if (analysis.errors.length > 0) {
     return `Bash input could not be parsed safely: ${analysis.errors[0]?.message ?? "unknown parser error"}`;
   }
-  // Keep every reachable directory: branches, failed cd calls, and subshells
-  // must not discard the original path context.
-  const directories = possibleBashWorkingDirectories(analysis, cwd);
-  for (const target of analysis.writeRedirectTargets) {
-    if (!directories) {
-      const reason = redirectHardDeny(target, undefined, cwd);
-      if (reason) return reason;
-      continue;
-    }
-    for (const directory of directories) {
-      const reason = redirectHardDeny(target, directory, cwd);
-      if (reason) return reason;
-    }
+  // Replay directory changes in source order so only commands after an
+  // unresolved one lose their path context. Keep every reachable directory:
+  // branches, failed cd calls, and subshells must not discard the original.
+  const trace = traceBashWorkingDirectories(analysis, cwd);
+  for (const target of analysis.groupWriteRedirectTargets) {
+    const reason = firstDirectoryHardDeny(
+      trace.final,
+      (directory) => redirectHardDeny(target, directory, cwd),
+    );
+    if (reason) return reason;
   }
-  for (const segment of analysis.commands) {
-    if (!directories) {
-      const reason = segmentHardDeny(segment, undefined, cwd);
-      if (reason) return reason;
-      continue;
-    }
-    for (const directory of directories) {
-      const reason = segmentHardDeny(segment, directory, cwd);
-      if (reason) return reason;
-    }
+  for (const [index, segment] of analysis.commands.entries()) {
+    const reason = firstDirectoryHardDeny(
+      trace.before[index],
+      (directory) => segmentHardDeny(segment, directory, cwd),
+    );
+    if (reason) return reason;
   }
   return undefined;
 }

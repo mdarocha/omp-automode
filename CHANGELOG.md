@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Directory-change order in hard-deny checks** — A `cd`, `eval`, `source`, or dynamic command name that cannot be resolved now affects only the commands after it, instead of every relative deletion, permission change, or redirect in the script. Paths that start with a variable (`$d/out.yml` after `d=$(mktemp -d)`) no longer count as relative to an unknown directory; they are checked as if the variable were empty. Commands in loops and functions are still checked against every directory the script can reach, and a relative `cd` in a loop stays unresolved. This stops blocking `cd /tmp; rm -rf hd2; git clone … hd2 && cd hd2 && …`, `mkdir -p ~/.omp/wt && cd ~/.omp/wt && rm -rf work && gh repo clone … work && cd work`, and a whole script wrapped in `eval '…'` that writes to `$d/gen.yml`, three commands the deterministic check blocked in real sessions without classifier review. Commands that follow an unresolved directory change stay blocked.
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
 ## Fork features
 
