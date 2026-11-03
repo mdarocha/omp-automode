@@ -121,6 +121,25 @@ export function modelVisibleConfigDiagnostics(
   );
 }
 
+/**
+ * Append the auto-mode guidance to a system prompt, or return `undefined` when
+ * the prompt already carries it. Pi passes one string; OMP passes an array of
+ * blocks and takes the same shape back. A `/tan` clone starts from its
+ * parent's already-extended prompt, so the guidance must not be added twice.
+ */
+export function withAutoModeGuidance(
+  systemPrompt: string | readonly string[],
+): string | string[] | undefined {
+  if (typeof systemPrompt === "string") {
+    return systemPrompt.includes(AUTO_MODE_GUIDANCE)
+      ? undefined
+      : `${systemPrompt}\n\n${AUTO_MODE_GUIDANCE}`;
+  }
+  return systemPrompt.some((block) => block.includes(AUTO_MODE_GUIDANCE))
+    ? undefined
+    : [...systemPrompt, AUTO_MODE_GUIDANCE];
+}
+
 function projectIsTrusted(
   ctx: { isProjectTrusted?: () => boolean },
 ): boolean {
@@ -249,6 +268,29 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     let enabledOverride: EnabledOverride = {};
     let loadedContext = "";
     let globalConfigNoticeShown = false;
+    // How the per-session state above was set up. OMP never emits
+    // `session_start` for `/tan` clones, so a session that gets a hook call
+    // first is initialised by `ensureSession` instead.
+    let sessionInit: "session-start" | "first-use" | undefined;
+
+    function initialiseSession(
+      ctx: ExtensionContext,
+      source: "session-start" | "first-use",
+    ): void {
+      loadResult = loadConfigWithDiagnostics(ctx.cwd, projectIsTrusted(ctx));
+      config = loadResult.config;
+      configDiagnostics = loadResult.diagnostics;
+      const restored = restoreState(ctx);
+      state = restored.state;
+      enabledOverride = bindEnabledOverride(ctx, restored.enabledOverride);
+      sessionInit = source;
+    }
+
+    function ensureSession(ctx: ExtensionContext): void {
+      if (!sessionInit) {
+        initialiseSession(ctx, "first-use");
+      }
+    }
 
     function effectiveConfig(): EffectiveConfig {
       return {
@@ -257,14 +299,29 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       };
     }
 
+    function findTool(name: string) {
+      try {
+        return pi.getAllTools().find((tool) => tool.name === name);
+      } catch {
+        // OMP leaves runtime actions unwired in sessions that never got
+        // `session_start`; a tool that cannot be found is not ours.
+        return undefined;
+      }
+    }
+
     function ownsInspectionTool(): boolean {
-      const tool = pi.getAllTools().find(({ name }) => name === INSPECT_TOOL);
+      const tool = findTool(INSPECT_TOOL);
       if (!tool) return false;
       const sourcePath = canonicalPath(tool.sourceInfo.path);
       return sourcePath === EXTENSION_PATH || sourcePath === EXTENSION_ENTRY_PATH;
     }
 
     function persist(): void {
+      // Without `session_start` OMP never wired this session's runtime
+      // actions, so `appendEntry` throws; the state stays in memory.
+      if (sessionInit === "first-use") {
+        return;
+      }
       pi.appendEntry(STATE_ENTRY, {
         ...state,
         enabledOverride: enabledOverride.value,
@@ -425,15 +482,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     }
 
     pi.on("session_start", (_event, ctx) => {
-      loadResult = loadConfigWithDiagnostics(
-        ctx.cwd,
-        projectIsTrusted(ctx),
-      );
-      config = loadResult.config;
-      configDiagnostics = loadResult.diagnostics;
-      const restored = restoreState(ctx);
-      state = restored.state;
-      enabledOverride = bindEnabledOverride(ctx, restored.enabledOverride);
+      initialiseSession(ctx, "session-start");
       if (
         ctx.hasUI &&
         globalConfig.notification &&
@@ -450,15 +499,21 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
 
     pi.on("session_shutdown", (_event, ctx) => {
       releaseEnabledOverride(ctx, enabledOverride);
+      sessionInit = undefined;
     });
 
-    pi.on("before_agent_start", (event) => {
+    pi.on("before_agent_start", (event, ctx) => {
+      ensureSession(ctx);
       const cfg = effectiveConfig();
       if (!cfg.enabled) return undefined;
       loadedContext = loadedContextFromSystemPromptOptions(
         event.systemPromptOptions,
       );
-      return { systemPrompt: `${event.systemPrompt}\n\n${AUTO_MODE_GUIDANCE}` };
+      const guided = withAutoModeGuidance(event.systemPrompt);
+      if (guided === undefined) return undefined;
+      // OMP accepts back the block array it passes in; Pi's typings only
+      // know the string form.
+      return { systemPrompt: guided as string };
     });
 
     pi.on("tool_result", (event) => {
@@ -484,6 +539,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       // 5. accepted ask rules force classifier review and skip all allow tiers,
       // 6. inside-CWD, permissions.allow, and read-only allow tiers,
       // 7. classifier for every remaining action, fail-closed on setup/parse errors.
+      ensureSession(ctx);
       const cfg = effectiveConfig();
       if (!cfg.enabled) return undefined;
 

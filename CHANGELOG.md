@@ -12,6 +12,7 @@ All notable changes to this project are documented in this file.
 - **`/auto-mode` command alias** — Only `/automode` is registered. Previously both names appeared in command completion with identical behavior
 
 ### Fixed
+- **`/tan` clones run auto mode** — OMP never emits `session_start` for `/tan` clones, so a clone kept the factory defaults: the main session's `/automode on|off` did not reach it, project configuration was ignored, and persisting state threw "Extension runtime not initialized" so every action in the clone failed. Auto mode now initialises a session on its first `before_agent_start` or `tool_call` when `session_start` has not run, using the session's own working directory and project trust. Subagents find their parent by session file or session id, because a clone's header names its parent by id. The auto-mode guidance is no longer added to a system prompt that already contains it, and it extends OMP's block-array system prompts as its own block. Counters and state of a clone stay in memory.
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
 ## Fork features
 
