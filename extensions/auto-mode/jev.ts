@@ -1,7 +1,8 @@
-import { classifyProviderError } from "./classifier-errors.ts";
+import { classifyProviderError, parseRetryAfterHeader } from "./classifier-errors.ts";
 import { jevModelId } from "./model.ts";
 import type {
   ClassificationDecision,
+  ClassifierFailure,
   ClassifierIoAttempt,
   ClassifierReasoning,
   ClassifyResult,
@@ -78,10 +79,10 @@ export async function classifyWithJev(
   const model = jevModelId(config.classifierModel);
   const apiKey = process.env.TYPESAFE_API_KEY?.trim();
   if (!model || !apiKey) {
+    const reason = "Jev requires TYPESAFE_API_KEY and a typesafe/jev-* classifier model; auto mode fails closed.";
     return {
-      decision: "block", tier: "none", reasoning,
-      reason: "Jev requires TYPESAFE_API_KEY and a typesafe/jev-* classifier model; auto mode fails closed.",
-      failure: { kind: "no-classifier" },
+      decision: "block", tier: "none", reasoning, reason,
+      failure: { kind: "no-classifier", message: reason },
     };
   }
   const state = { context, action };
@@ -99,10 +100,10 @@ export async function classifyWithJev(
   // Jev has separate 32k per-question and 64k per-request limits.
   if (questionTokens.some((tokens) => stateTokens + tokens + 4096 > 32_000) ||
     stateTokens + questionTokens.reduce((sum, tokens) => sum + tokens, 0) + 4096 > 64_000) {
+    const reason = "Exact tool input cannot fit in Jev's context without truncation; auto mode fails closed.";
     return {
-      decision: "block", tier: "none", reasoning,
-      reason: "Exact tool input cannot fit in Jev's context without truncation; auto mode fails closed.",
-      failure: { kind: "context-limit", stage: "detailed" },
+      decision: "block", tier: "none", reasoning, reason,
+      failure: { kind: "context-limit", message: reason, stage: "detailed" },
     };
   }
 
@@ -116,7 +117,7 @@ export async function classifyWithJev(
   controller.signal.addEventListener("abort", onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), config.classifierTimeoutMs);
   let failureReason = "Jev request failed; auto mode fails closed.";
-  let invalidResponse = false;
+  let failure: ClassifierFailure = { kind: "server", message: failureReason };
   let decision: ClassificationDecision;
   try {
     if (signal?.aborted) controller.abort();
@@ -134,12 +135,17 @@ export async function classifyWithJev(
         controller.signal.throwIfAborted();
         if (!response.ok) {
           failureReason = `Jev API returned HTTP ${response.status}; auto mode fails closed.`;
+          const retryAfterMs = parseRetryAfterHeader(response.headers.get("retry-after"));
+          failure = {
+            ...classifyProviderError(failureReason, response.status),
+            ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+          };
           throw new Error("Jev HTTP error");
         }
         const text = await response.text();
         controller.signal.throwIfAborted();
         failureReason = "Jev returned an invalid response; auto mode fails closed.";
-        invalidResponse = true;
+        failure = { kind: "invalid-response", message: failureReason };
         const raw: unknown = JSON.parse(text);
         if (!isJevResponse(raw)) throw new Error("Invalid Jev response");
         const answers = raw.answers;
@@ -179,14 +185,13 @@ export async function classifyWithJev(
       failureReason = signal?.aborted
         ? "Jev request was aborted; auto mode fails closed."
         : "Jev request timed out; auto mode fails closed.";
+      failure = { kind: signal?.aborted ? "aborted" : "timeout", message: failureReason };
     }
     decision = {
       decision: "block",
       tier: "none",
       reason: failureReason,
-      failure: invalidResponse
-        ? { kind: "invalid-response", stage: "detailed" }
-        : { ...classifyProviderError(failureReason, signal?.aborted ? "aborted" : undefined), stage: "detailed" },
+      failure: { ...failure, stage: "detailed" },
     };
     attempts.push({ stage: "detailed", attempt: 1, error: failureReason, durationMs: Date.now() - started });
   } finally {

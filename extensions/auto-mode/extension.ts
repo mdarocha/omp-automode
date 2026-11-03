@@ -36,6 +36,7 @@ import {
   releaseSession,
   type SessionRecord,
 } from "./ask-forwarding.ts";
+import { classifierCooldowns } from "./classifier-fallback.ts";
 import { analyzeBash, type BashAnalysis } from "./bash.ts";
 import {
   AUTO_MODE_GUIDANCE,
@@ -545,8 +546,11 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       };
     }
 
-    function blockedToolReason(reason: string): string {
-      return `[pi-automode] Action blocked; the tool did not run. ${reason} Do not claim success, rely on effects from this call, or attempt an equivalent workaround. Report the block to the user before continuing with dependent work. Independent work can continue.`;
+    function blockedToolReason(denial: DenialRecord): string {
+      const cause = denial.kind === "classifier-unavailable"
+        ? `${denial.reason}. This is not a policy denial: auto mode could not review the action.`
+        : denial.reason;
+      return `[pi-automode] Action blocked; the tool did not run. ${cause} Do not claim success, rely on effects from this call, or attempt an equivalent workaround. Report the block to the user before continuing with dependent work. Independent work can continue.`;
     }
 
     function block(
@@ -559,9 +563,17 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       state.lastReason = denial.reason;
       state.lastDecisionKind = denial.kind;
       pushDenial(state, denial);
-      if (denial.kind === "classifier" && logCtx.failure) {
+      if (
+        (denial.kind === "classifier" || denial.kind === "classifier-unavailable") &&
+        logCtx.failure
+      ) {
+        // Typed fields only: `failure.message` is provider text and stays out
+        // of what `automode_inspect` shows the model.
+        const { kind, stage, retryAfterMs } = logCtx.failure;
         pushClassifierError(state, {
-          ...logCtx.failure,
+          kind,
+          ...(stage === undefined ? {} : { stage }),
+          ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
           timestamp: denial.timestamp,
           model: logCtx.resolvedModel ?? logCtx.classifierModel,
         });
@@ -584,7 +596,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       }
       return {
         block: true,
-        reason: blockedToolReason(denial.reason),
+        reason: blockedToolReason(denial),
       };
     }
 
@@ -1081,6 +1093,18 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         );
       }
 
+      if (decision.failure) {
+        // The classifier could not decide: not a policy denial, so the
+        // classifier-denied counter stays unchanged.
+        return block(ctx, {
+          timestamp: Date.now(),
+          toolName: event.toolName,
+          reason: decision.reason,
+          action: summary,
+          kind: "classifier-unavailable",
+        }, logCtx);
+      }
+
       state.classifierDenied += 1;
       return block(ctx, {
         timestamp: Date.now(),
@@ -1176,6 +1200,8 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         return;
       }
       if (command === "reload") {
+        // Also forgets rate-limit cooldowns, so the next action probes providers again.
+        classifierCooldowns.clear();
         loadResult = loadConfigWithDiagnostics(
           ctx.cwd,
           projectIsTrusted(ctx),

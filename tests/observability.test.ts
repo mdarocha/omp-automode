@@ -8,7 +8,6 @@ import {
 	buildClassifierActionMessage,
 	buildEffectiveConfigFromSources,
 	classifyInStages,
-	classifyProviderError,
 	classifyWithRetry,
 	createPiAutomode,
 	decisionStage,
@@ -41,17 +40,14 @@ const prompt = {
 	contextMessage: { role: "user" as const, content: [{ type: "text" as const, text: "ctx" }], timestamp: 1 },
 	actionMessage: buildClassifierActionMessage("action"),
 };
-const classifier = { model: { provider: "test", id: "x", contextWindow: 200_000, maxTokens: 32_000 } as any };
+/** The typed part of a failure; `message` carries provider text and is not part of what gets recorded. */
+function typed(failure: { message?: string } | undefined) {
+	if (failure === undefined) return undefined;
+	const { message: _message, ...rest } = failure;
+	return rest;
+}
 
-test("classifyProviderError types real provider failures", () => {
-	assert.deepEqual(classifyProviderError(ANTHROPIC_429), { kind: "rate-limit", retryAfterMs: 179_208_000 });
-	assert.deepEqual(classifyProviderError("Classifier request timed out after 20000 ms."), { kind: "timeout" });
-	assert.deepEqual(classifyProviderError("HTTP 503 service unavailable retry-after=30"), { kind: "server", retryAfterMs: 30_000 });
-	assert.deepEqual(classifyProviderError("401 invalid x-api-key"), { kind: "auth" });
-	assert.deepEqual(classifyProviderError("Classifier model request was aborted.", "aborted"), { kind: "aborted" });
-	assert.deepEqual(classifyProviderError("ECONNRESET"), { kind: "provider" });
-	assert.deepEqual(classifyProviderError(undefined, "length"), { kind: "invalid-response" });
-});
+const classifier = { model: { provider: "test", id: "x", contextWindow: 200_000, maxTokens: 32_000 } as any };
 
 test("parseRetryAfterMs reads milliseconds and seconds and ignores anything else", () => {
 	assert.equal(parseRetryAfterMs("x retry-after-ms=1500"), 1500);
@@ -68,7 +64,7 @@ test("fast-stage provider error response yields a typed failure with stage and r
 		{ sessionId: "s" },
 	);
 	assert.equal(decision.decision, "block");
-	assert.deepEqual(decision.failure, { kind: "rate-limit", retryAfterMs: 179_208_000, stage: "fast" });
+	assert.deepEqual(typed(decision.failure), { kind: "rate-limit", retryAfterMs: 179_208_000, stage: "fast" });
 });
 
 test("a thrown timeout is typed at the fast and detailed stages", async () => {
@@ -76,9 +72,9 @@ test("a thrown timeout is typed at the fast and detailed stages", async () => {
 		throw new Error("Classifier request timed out after 20000 ms.");
 	};
 	const fast = await classifyInStages(timeout, classifier, prompt, undefined, { sessionId: "s" });
-	assert.deepEqual(fast.failure, { kind: "timeout", stage: "fast" });
+	assert.deepEqual(typed(fast.failure), { kind: "timeout", stage: "fast" });
 	const detailed = await classifyWithRetry(timeout, classifier, { systemPrompt: "s", messages: [] }, undefined);
-	assert.deepEqual(detailed.failure, { kind: "timeout", stage: "detailed" });
+	assert.deepEqual(typed(detailed.failure), { kind: "timeout", stage: "detailed" });
 });
 
 test("a fast answer other than 0 or 1 is an invalid-response failure", async () => {
@@ -89,7 +85,7 @@ test("a fast answer other than 0 or 1 is an invalid-response failure", async () 
 		undefined,
 		{ sessionId: "s" },
 	);
-	assert.deepEqual(decision.failure, { kind: "invalid-response", stage: "fast" });
+	assert.deepEqual(typed(decision.failure), { kind: "invalid-response", stage: "fast" });
 });
 
 test("a real classifier decision carries no failure", async () => {
@@ -242,13 +238,14 @@ test("a fail-closed classifier block logs errorKind, retryAfterMs, and stage", a
 				decision: "block",
 				tier: "none",
 				reason: `Fast classifier failed; auto mode fails closed: ${ANTHROPIC_429}`,
-				failure: { kind: "rate-limit", stage: "fast", retryAfterMs: 179_208_000 },
+				failure: { kind: "rate-limit", stage: "fast", retryAfterMs: 179_208_000, message: "FAILURE-MESSAGE 429" },
 			}),
 		});
 		await s.emit("tool_call", { toolName: "bash", input: { command: "npm test" } }, s.ctx);
 		const [entry] = readLog(sessionFile);
+		assert.doesNotMatch(JSON.stringify(entry), /FAILURE-MESSAGE/);
 		assert.equal(entry.outcome, "block");
-		assert.equal(entry.kind, "classifier");
+		assert.equal(entry.kind, "classifier-unavailable");
 		assert.equal(entry.stage, "classifier-fast");
 		assert.equal(entry.errorKind, "rate-limit");
 		assert.equal(entry.retryAfterMs, 179_208_000);
@@ -296,8 +293,8 @@ test("inspect status lists recent classifier errors without payloads", async () 
 	const dir = mkdtempSync(join(os.tmpdir(), "pi-automode-obs-"));
 	try {
 		const failures = [
-			{ kind: "timeout", stage: "fast" },
-			{ kind: "rate-limit", stage: "detailed", retryAfterMs: 60_000 },
+			{ kind: "timeout", stage: "fast", message: "FAILURE-MESSAGE timed out" },
+			{ kind: "rate-limit", stage: "detailed", retryAfterMs: 60_000, message: "FAILURE-MESSAGE 429" },
 		] as const;
 		let call = 0;
 		const s = await startSession({
@@ -320,7 +317,7 @@ test("inspect status lists recent classifier errors without payloads", async () 
 			[["rate-limit", "detailed", 60_000, "test/haiku"], ["timeout", "fast", undefined, "test/haiku"]],
 		);
 		assert.equal(typeof errors[0].timestamp, "number");
-		assert.doesNotMatch(JSON.stringify(status), /PROVIDER-PAYLOAD|req_x/);
+		assert.doesNotMatch(JSON.stringify(status), /PROVIDER-PAYLOAD|FAILURE-MESSAGE|req_x/);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

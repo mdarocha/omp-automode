@@ -40,7 +40,7 @@ The tool cannot enable or disable auto mode, reload configuration, reset state, 
 | `enabledSource` | Where the effective enabled state came from: `default`, `global`, `project-local`, or `inline` (the config scope that set `autoMode.enabled`); `override` (`/automode on\|off` in this session); or `parent` (a subagent following its parent's `/automode on\|off`). |
 | `agent` | `{ kind, id, name, depth }` from the host. OMP reports it. Pi reports none, so the field is absent. |
 | `hasUI` | Whether this session has an interactive UI. A headless session blocks `permissions.ask` matches. |
-| `state.recentClassifierErrors` | The last 12 fail-closed classifier failures, newest first: `{ kind, stage, timestamp, model, retryAfterMs? }`. Kinds are `rate-limit`, `timeout`, `auth`, `server`, `aborted`, `provider`, `invalid-response`, `context-limit`, and `no-classifier`. |
+| `state.recentClassifierErrors` | The last 12 fail-closed classifier failures, newest first: `{ kind, stage, timestamp, model, retryAfterMs? }`. Kinds are `rate-limit`, `timeout`, `auth`, `server`, `aborted`, `invalid-response`, `context-limit`, and `no-classifier`. |
 
 ## Model-visible data
 

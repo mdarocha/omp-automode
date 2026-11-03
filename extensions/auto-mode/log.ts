@@ -37,7 +37,7 @@ export function decisionStage(
   kind: DecisionKind,
   classifierStage?: ClassifierStage,
 ): DecisionStage | undefined {
-  if (kind === "classifier") {
+  if (kind === "classifier" || kind === "classifier-unavailable") {
     return classifierStage === undefined
       ? undefined
       : CLASSIFIER_STAGE_BY_MODEL_STAGE[classifierStage];

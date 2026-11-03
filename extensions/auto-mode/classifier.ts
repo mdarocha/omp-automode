@@ -17,12 +17,19 @@ import {
   DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
 } from "./constants.ts";
 import { resolveClassifierModels } from "./classifier-models.ts";
+import {
+  failureFromResponse,
+  failureFromThrown,
+} from "./classifier-errors.ts";
+import {
+  classifyWithFallback,
+  DECISION_BUDGET_TIMEOUTS,
+} from "./classifier-fallback.ts";
 import { formatModelSpec, jevModelId } from "./model.ts";
 import { loadOmpBridge } from "./omp.ts";
 import { classifyWithJev } from "./jev.ts";
 import { formatSessionCreatedPaths } from "./provenance.ts";
 import { buildClassifierTranscript } from "./transcript.ts";
-import { classifyProviderError } from "./classifier-errors.ts";
 import type {
   ClassificationDecision,
   ClassifyAction,
@@ -55,68 +62,12 @@ export function buildClassifierPrompt(config: EffectiveConfig): string {
     );
 }
 
-type ClassifierResolution = {
-  reasoning: ClassifierReasoningLog;
-  classifier?: {
-    model: Model<any>;
-    apiKey?: string;
-    headers?: ProviderHeaders;
-    env?: Record<string, string>;
-  };
-  completionPlan?: ClassifierCompletionPlan;
-  /** Why no classifier could be resolved, for the fail-closed reason. */
-  problem?: string;
-};
-
 export function classifierReasoningForConfig(
   requestedLevel: ClassifierReasoningLevel | undefined,
 ): ClassifierReasoningLog {
   return requestedLevel === undefined
     ? { mode: "server-default" }
     : { mode: "explicit", requestedLevel };
-}
-
-async function resolveClassifier(
-  ctx: ExtensionContext,
-  config: EffectiveConfig,
-): Promise<ClassifierResolution> {
-  const { models, problem } = resolveClassifierModels(
-    ctx,
-    config,
-    await loadOmpBridge(),
-  );
-  const { rawComplete, simpleComplete } = createRegistryCompletionFns(
-    ctx.modelRegistry,
-  );
-  let reasoning = classifierReasoningForConfig(config.classifierReasoningLevel);
-  let authProblem: string | undefined;
-  // A role chain can list models whose provider has no credentials here; use
-  // the first one that can authenticate.
-  for (const model of models) {
-    const completionPlan = createClassifierCompletionPlan(
-      model,
-      config.classifierReasoningLevel,
-      rawComplete,
-      simpleComplete,
-    );
-    reasoning = completionPlan.reasoning;
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok) {
-      authProblem ??= `${formatModelSpec(model)}: ${auth.error}`;
-      continue;
-    }
-    return {
-      reasoning,
-      classifier: {
-        model: auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model,
-        apiKey: auth.apiKey,
-        headers: auth.headers,
-        env: auth.env,
-      },
-      completionPlan,
-    };
-  }
-  return { reasoning, problem: problem ?? authProblem };
 }
 
 type ClassifierCompletionContext = {
@@ -604,6 +555,7 @@ function classifierFailure(
   response: AssistantMessage,
   label: "Classifier" | "Fast classifier",
   stage: ClassifierStage,
+  signal: AbortSignal | undefined,
   retryLength = false,
   allowToolUse = false,
 ): ClassificationDecision | undefined {
@@ -619,16 +571,12 @@ function classifierFailure(
     : response.stopReason === "error"
       ? "Classifier model returned an error response."
       : `${label} response did not stop cleanly (${response.stopReason}).`;
+  const message = response.errorMessage || fallback;
   return {
     decision: "block",
     tier: "none",
-    reason: `${label} failed; auto mode fails closed: ${
-      response.errorMessage || fallback
-    }`,
-    failure: {
-      ...classifyProviderError(response.errorMessage, response.stopReason),
-      stage,
-    },
+    reason: `${label} failed; auto mode fails closed: ${message}`,
+    failure: { ...failureFromResponse(response, message, signal), stage },
   };
 }
 
@@ -690,11 +638,11 @@ export async function classifyWithRetry(
         decision: "block",
         tier: "none",
         reason: `Classifier failed; auto mode fails closed: ${message}`,
-        failure: { ...classifyProviderError(message), stage },
+        failure: { ...failureFromThrown(error, signal), stage },
       };
     }
     const durationMs = Date.now() - started;
-    const failure = classifierFailure(response, "Classifier", stage, true, true);
+    const failure = classifierFailure(response, "Classifier", stage, signal, true, true);
     const decision = response.stopReason === "toolUse"
       ? parseClassifierDecision(response)
       : undefined;
@@ -712,7 +660,7 @@ export async function classifyWithRetry(
     decision: "block",
     tier: "none",
     reason: lastReason,
-    failure: { kind: "invalid-response", stage },
+    failure: { kind: "invalid-response", message: lastReason, stage },
   };
 }
 
@@ -756,7 +704,7 @@ export async function classifyInStages(
       decision: "block",
       tier: "none",
       reason: fastLimitReason,
-      failure: { kind: "context-limit", stage: "fast" },
+      failure: { kind: "context-limit", message: fastLimitReason, stage: "fast" },
     };
   }
 
@@ -797,12 +745,12 @@ export async function classifyInStages(
       decision: "block",
       tier: "none",
       reason: `Fast classifier failed; auto mode fails closed: ${message}`,
-      failure: { ...classifyProviderError(message), stage: "fast" },
+      failure: { ...failureFromThrown(error, signal), stage: "fast" },
     };
   }
 
   const fastText = extractAssistantText(fastResponse, false).trim();
-  const failure = classifierFailure(fastResponse, "Fast classifier", "fast");
+  const failure = classifierFailure(fastResponse, "Fast classifier", "fast", signal);
   options.onAttempt?.(
     responseAttempt(
       "fast",
@@ -822,12 +770,13 @@ export async function classifyInStages(
     };
   }
   if (fastText !== "1") {
+    const reason =
+      "Fast classifier response was not 0 or 1 after trimming whitespace; auto mode fails closed.";
     return {
       decision: "block",
       tier: "none",
-      reason:
-        "Fast classifier response was not 0 or 1 after trimming whitespace; auto mode fails closed.",
-      failure: { kind: "invalid-response", stage: "fast" },
+      reason,
+      failure: { kind: "invalid-response", message: reason, stage: "fast" },
     };
   }
 
@@ -853,7 +802,7 @@ export async function classifyInStages(
       decision: "block",
       tier: "none",
       reason: detailedLimitReason,
-      failure: { kind: "context-limit", stage: "detailed" },
+      failure: { kind: "context-limit", message: detailedLimitReason, stage: "detailed" },
     };
   }
 
@@ -916,28 +865,31 @@ export const defaultClassifyAction: ClassifyAction = async (
   if (jevModelId(config.classifierModel)) {
     return classifyWithJev(config, action, contextText, systemPrompt, ctx.signal);
   }
-  const resolution = await resolveClassifier(ctx, config);
-  if (!resolution.classifier || !resolution.completionPlan) {
+  const { models, problem } = resolveClassifierModels(
+    ctx,
+    config,
+    await loadOmpBridge(),
+  );
+  if (models.length === 0) {
+    const reason = `No classifier model/API key available${
+      problem ? ` (${problem})` : ""
+    }; auto mode fails closed.`;
     return {
       decision: "block",
       tier: "none",
-      reason: `No classifier model/API key available${
-        resolution.problem ? ` (${resolution.problem})` : ""
-      }; auto mode fails closed.`,
-      failure: { kind: "no-classifier" },
-      reasoning: resolution.reasoning,
+      reason,
+      failure: { kind: "no-classifier", message: reason },
+      reasoning: classifierReasoningForConfig(config.classifierReasoningLevel),
     };
   }
-  const classifier = resolution.classifier;
-  const completionPlan = resolution.completionPlan;
-
+  const { rawComplete, simpleComplete } = createRegistryCompletionFns(
+    ctx.modelRegistry,
+  );
   const contextMessage: UserMessage = {
     role: "user",
     content: [{ type: "text", text: contextText }],
     timestamp: Date.now(),
   };
-  const attempts: ClassifierIoAttempt[] = [];
-  const started = Date.now();
   const ioPrompt = {
     system: systemPrompt,
     context: contextText,
@@ -946,29 +898,59 @@ export const defaultClassifyAction: ClassifyAction = async (
     detailedInstruction: CLASSIFIER_DETAILED_INSTRUCTION,
   };
   const actionMessage = buildClassifierActionMessage(action);
-  const decision = await classifyInStages(
-    completionPlan.completeFn,
-    classifier,
-    { systemPrompt, contextMessage, actionMessage },
-    ctx.signal,
-    {
-      sessionId: classifierCacheSessionId(ctx),
-      fastClassifierMaxTokens: config.fastClassifierMaxTokens,
-      timeoutMs: config.classifierTimeoutMs,
-      reasoningLevel: completionPlan.reasoningLevel,
-      onAttempt: (attempt) => attempts.push(attempt),
-    },
-  );
 
-  return {
-    ...decision,
-    reasoning: completionPlan.reasoning,
-    io: {
-      model: formatModelSpec(classifier.model),
+  const classifyWithModel = async (model: Model<any>): Promise<ClassifyResult> => {
+    const completionPlan = createClassifierCompletionPlan(
+      model,
+      config.classifierReasoningLevel,
+      rawComplete,
+      simpleComplete,
+    );
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok) {
+      return {
+        decision: "block",
+        tier: "none",
+        reason: `No API key for ${formatModelSpec(model)}: ${auth.error}`,
+        failure: { kind: "auth", message: auth.error },
+        reasoning: completionPlan.reasoning,
+      };
+    }
+    const attempts: ClassifierIoAttempt[] = [];
+    const started = Date.now();
+    const decision = await classifyInStages(
+      completionPlan.completeFn,
+      {
+        model: auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model,
+        apiKey: auth.apiKey,
+        headers: auth.headers,
+        env: auth.env,
+      },
+      { systemPrompt, contextMessage, actionMessage },
+      ctx.signal,
+      {
+        sessionId: classifierCacheSessionId(ctx),
+        fastClassifierMaxTokens: config.fastClassifierMaxTokens,
+        timeoutMs: config.classifierTimeoutMs,
+        reasoningLevel: completionPlan.reasoningLevel,
+        onAttempt: (attempt) => attempts.push(attempt),
+      },
+    );
+    return {
+      ...decision,
       reasoning: completionPlan.reasoning,
-      prompt: ioPrompt,
-      attempts,
-      durationMs: Date.now() - started,
-    },
+      io: {
+        model: formatModelSpec(model),
+        reasoning: completionPlan.reasoning,
+        prompt: ioPrompt,
+        attempts,
+        durationMs: Date.now() - started,
+      },
+    };
   };
+
+  return classifyWithFallback(models, classifyWithModel, {
+    budgetMs: config.classifierTimeoutMs * DECISION_BUDGET_TIMEOUTS,
+    signal: ctx.signal,
+  });
 };

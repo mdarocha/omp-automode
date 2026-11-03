@@ -73,7 +73,7 @@ Pi-automode writes one `decision` entry for each tool-call decision. Each allowe
 | `cwd` | working directory |
 | `tool` | tool name, for example `bash` or `write` |
 | `summary` | `actionSummary` — tool name + input JSON (truncated) |
-| `kind` | enforcement path: `permissions.deny`, `permissions.ask`, `deterministic-hard-deny`, `deterministic-path-deny`, `permissions.allow`, `inside-working-directory`, `classifier`, `read-only`, or `setup`. `automode_inspect` calls log as `read-only`. |
+| `kind` | enforcement path: `permissions.deny`, `permissions.ask`, `deterministic-hard-deny`, `deterministic-path-deny`, `permissions.allow`, `inside-working-directory`, `classifier`, `classifier-unavailable`, `read-only`, or `setup`. `automode_inspect` calls log as `read-only`. |
 | `outcome` | `allow` or `block` |
 | `reason` | the reason string (classifier reason, or the deterministic/permission reason) |
 | `classifierModel` | the configured classifier model for a classifier-routed decision |
@@ -82,7 +82,7 @@ Pi-automode writes one `decision` entry for each tool-call decision. Each allowe
 | `stage` | what decided: `permissions`, `hard-deny`, `path`, `inside-cwd`, `allow`, `read-only`, `classifier-fast`, or `classifier-detailed`. It is absent for `setup` blocks and for a classifier decision that never reached a model call. For a classifier decision it names the last stage that ran, so `classifier-fast` is a fast allow or a fast-stage failure. |
 | `agent` | `{ id, name, kind }` of the agent that issued the call. OMP reports it (`kind` is `main` or `sub`). Pi reports no agent, so the field is absent. |
 | `hasUI` | whether the session had an interactive UI. A headless session cannot answer `permissions.ask`. |
-| `errorKind` | present only when the classifier failed closed instead of judging the action: `rate-limit`, `timeout`, `auth`, `server`, `aborted`, `provider`, `invalid-response`, `context-limit`, or `no-classifier`. A normal classifier denial has no `errorKind`. |
+| `errorKind` | present only when the classifier failed closed instead of judging the action: `rate-limit`, `timeout`, `auth`, `server`, `aborted`, `invalid-response`, `context-limit`, or `no-classifier`. A normal classifier denial has no `errorKind`. The error text itself is never logged. |
 | `retryAfterMs` | the wait the provider asked for, parsed from the error's `retry-after-ms` or `retry-after` (seconds) hint. It is present only when the error carried one. |
 
 The five fields after `reasoning` were added later. Readers must treat all of them as optional, because older log lines lack them.

@@ -162,6 +162,7 @@ export type DenialRecord = {
     | "deterministic-hard-deny"
     | "deterministic-path-deny"
     | "classifier"
+    | "classifier-unavailable"
     | "setup";
 };
 
@@ -172,23 +173,34 @@ export type DecisionKind =
   | "read-only"
   | "inside-working-directory";
 
-/** Why a classifier call failed closed. The first six are provider-call failures. */
+/**
+ * Why a classifier call failed closed. `rate-limit`, `timeout`, `auth`,
+ * `server`, and `aborted` are provider-call failures; `server` also covers
+ * errors nothing else recognises. `invalid-response` is an unusable answer or a
+ * request the provider rejected, `context-limit` an action too large for the
+ * model, and `no-classifier` the lack of any usable model or credential.
+ */
 export type ClassifierErrorKind =
   | "rate-limit"
   | "timeout"
   | "auth"
   | "server"
   | "aborted"
-  | "provider"
   | "invalid-response"
   | "context-limit"
   | "no-classifier";
 
 export type ClassifierStage = "fast" | "detailed";
 
-/** Typed cause of a fail-closed classifier block. Carries no provider payload. */
+/** Typed cause of a fail-closed classifier block. */
 export type ClassifierFailure = {
   kind: ClassifierErrorKind;
+  /**
+   * The provider's or harness's error text. It only feeds block reasons: the
+   * decision log and `automode_inspect` record `kind`, `stage`, and
+   * `retryAfterMs`, never this.
+   */
+  message?: string;
   /** Stage that failed, when the failure happened inside one. */
   stage?: ClassifierStage;
   /** Wait the provider requested, when its error carried one. */
@@ -196,7 +208,7 @@ export type ClassifierFailure = {
 };
 
 /** A recent fail-closed classifier failure, kept for `automode_inspect`. */
-export type ClassifierErrorRecord = ClassifierFailure & {
+export type ClassifierErrorRecord = Omit<ClassifierFailure, "message"> & {
   timestamp: number;
   /** Classifier model, as `provider/id`, when one was resolved. */
   model?: string;
@@ -253,6 +265,12 @@ export type ClassifierIoAttempt = {
   };
   parsed?: ClassificationDecision;
   error?: string;
+  /** Typed cause when the attempt failed, set by the fallback walk. */
+  errorKind?: ClassifierErrorKind;
+  /** Delay the provider asked for after a failed attempt. */
+  retryAfterMs?: number;
+  /** Model that served the attempt (`provider/id`), set by the fallback walk. */
+  model?: string;
   durationMs: number;
 };
 

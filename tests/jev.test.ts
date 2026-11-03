@@ -90,6 +90,7 @@ test("Jev blocks malformed and incomplete answers instead of treating them as sa
 	const malformed = await defaultClassifyAction(createFakeCtx() as never, baseConfig({ classifierModel: "typesafe/jev-latest" }), "{}", "");
 	assert.equal(malformed.decision, "block");
 	assert.match(malformed.reason, /invalid response/);
+	assert.equal(malformed.failure?.kind, "invalid-response");
 });
 
 test("Jev blocks missing credentials and provider errors without disclosing keys", async (t) => {
@@ -99,11 +100,13 @@ test("Jev blocks missing credentials and provider errors without disclosing keys
 	const missing = await defaultClassifyAction(createFakeCtx() as never, baseConfig({ classifierModel: "typesafe/jev-latest" }), "{}", "");
 	assert.equal(missing.decision, "block");
 	assert.match(missing.reason, /TYPESAFE_API_KEY/);
+	assert.equal(missing.failure?.kind, "no-classifier");
 	process.env.TYPESAFE_API_KEY = "jev-test-key";
 	t.mock.method(globalThis, "fetch", async () => new Response("provider-body-jev-test-key", { status: 401 }));
 	const rejected = await defaultClassifyAction(createFakeCtx() as never, baseConfig({ classifierModel: "typesafe/jev-latest" }), "{}", "");
 	assert.equal(rejected.decision, "block");
 	assert.match(rejected.reason, /HTTP 401/);
+	assert.equal(rejected.failure?.kind, "auth");
 	assert.equal(JSON.stringify(rejected).includes("jev-test-key"), false);
 	t.mock.restoreAll();
 	t.mock.method(globalThis, "fetch", async () => { throw new Error("network failure containing jev-test-key"); });
@@ -119,6 +122,7 @@ test("Jev cancellation and deadlines cover response bodies and cannot produce a 
 	const timedOut = await defaultClassifyAction(createFakeCtx() as never, baseConfig({ classifierModel: "typesafe/jev-latest", classifierTimeoutMs: 10 }), "{}", "");
 	assert.equal(timedOut.decision, "block");
 	assert.match(timedOut.reason, /timed out/);
+	assert.equal(timedOut.failure?.kind, "timeout");
 	body.resolve(JSON.stringify(jevResponse()));
 	await setImmediate();
 	assert.deepEqual(timedOut.io?.attempts.map((attempt) => ({ parsed: attempt.parsed, error: attempt.error })), [
@@ -129,6 +133,7 @@ test("Jev cancellation and deadlines cover response bodies and cannot produce a 
 	const cancelled = await defaultClassifyAction(createFakeCtx([], { signal: controller.signal }) as never, baseConfig({ classifierModel: "typesafe/jev-latest" }), "{}", "");
 	assert.equal(cancelled.decision, "block");
 	assert.match(cancelled.reason, /aborted/);
+	assert.equal(cancelled.failure?.kind, "aborted");
 	t.mock.restoreAll();
 	const pendingFetch = Promise.withResolvers<Response>();
 	t.mock.method(globalThis, "fetch", () => pendingFetch.promise);
@@ -146,4 +151,5 @@ test("Jev blocks oversized actions without truncating or sending them", async (t
 	const result = await defaultClassifyAction(createFakeCtx() as never, baseConfig({ classifierModel: "typesafe/jev-latest" }), "x".repeat(150_000), "");
 	assert.equal(result.decision, "block");
 	assert.match(result.reason, /without truncation/);
+	assert.equal(result.failure?.kind, "context-limit");
 });
