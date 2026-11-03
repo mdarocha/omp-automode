@@ -3,6 +3,8 @@
     "classifierReasoningLevel": "low",
     "classifierTimeoutMs": 20000,
     "allowInsideWorkingDirectory": false,
+    "allowReadOnlyBash": false,
+    "readOnlyRoots": [],
     "deniedPaths": [
       "*.env",
       "~/.ssh/*",

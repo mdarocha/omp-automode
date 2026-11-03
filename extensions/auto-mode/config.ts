@@ -11,6 +11,7 @@ import { dirname, resolve } from "node:path";
 import {
   DEFAULT_ALLOW,
   DEFAULT_ALLOW_INSIDE_WORKING_DIRECTORY,
+  DEFAULT_ALLOW_READ_ONLY_BASH,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFY_READ_ONLY_TOOLS,
   DEFAULT_DENIED_PATHS,
@@ -21,6 +22,7 @@ import {
   DEFAULT_MAX_TOOL_TRANSCRIPT_TOKENS,
   DEFAULT_MAX_USER_TRANSCRIPT_TOKENS,
   DEFAULT_PROTECTED_PATHS,
+  DEFAULT_READ_ONLY_ROOTS,
   DEFAULT_SOFT_DENY,
   MAX_CLASSIFIER_TIMEOUT_MS,
   PI_GLOBAL_SETTINGS,
@@ -34,6 +36,7 @@ import {
   MAX_WILDCARD_PATTERN_LENGTH,
   parseToolPattern,
 } from "./permissions.ts";
+import { readOnlyRootProblem } from "./read-only-roots.ts";
 import type {
   AutoModeSettings,
   ClassifierReasoningLevel,
@@ -287,6 +290,8 @@ export function validateSettingsFile(
         "fastClassifierMaxTokens",
         "allowInsideWorkingDirectory",
         "deniedPaths",
+        "allowReadOnlyBash",
+        "readOnlyRoots",
         "maxUserTranscriptTokens",
         "maxToolTranscriptTokens",
         "environment",
@@ -359,6 +364,19 @@ export function validateSettingsFile(
           `${source}: autoMode.allowInsideWorkingDirectory must be a boolean`,
         );
       }
+      if (
+        hasOwn(autoMode, "allowReadOnlyBash") &&
+        typeof autoMode.allowReadOnlyBash !== "boolean"
+      ) {
+        diagnostics.push(
+          `${source}: autoMode.allowReadOnlyBash must be a boolean`,
+        );
+      }
+      validateReadOnlyRootsSetting(
+        autoMode.readOnlyRoots,
+        source,
+        diagnostics,
+      );
       validateDeniedPathsSetting(
         autoMode.deniedPaths,
         source,
@@ -567,6 +585,38 @@ function validateDeniedPathsSetting(
 }
 
 /**
+ * Validate `readOnlyRoots`: absolute directories (after `~`/`$HOME`
+ * expansion) that are not the filesystem root, the home directory, or a system
+ * root. Invalid entries are reported here and dropped when the config is built.
+ */
+function validateReadOnlyRootsSetting(
+  value: unknown,
+  source: string,
+  diagnostics: string[],
+): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    diagnostics.push(`${source}: readOnlyRoots must be an array of strings`);
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    if (entry === "$defaults") continue;
+    if (typeof entry !== "string" || entry.trim() === "") {
+      diagnostics.push(
+        `${source}: readOnlyRoots[${index}] must be a non-empty absolute path`,
+      );
+      continue;
+    }
+    const problem = readOnlyRootProblem(entry);
+    if (problem) {
+      diagnostics.push(
+        `${source}: readOnlyRoots[${index}] "${entry}" is ignored: ${problem}`,
+      );
+    }
+  }
+}
+
+/**
  * A pattern can only match a resolved absolute path when it starts with a
  * form that anchors it: a leading `/`, a home expansion (`~`, `$HOME`,
  * `${HOME}`), or a `*` wildcard that absorbs the leading slash. Anything else
@@ -632,6 +682,9 @@ function applyAutoModeScalars(
       typeof settings.allowInsideWorkingDirectory === "boolean"
         ? settings.allowInsideWorkingDirectory
         : base.allowInsideWorkingDirectory,
+    allowReadOnlyBash: typeof settings.allowReadOnlyBash === "boolean"
+      ? settings.allowReadOnlyBash
+      : base.allowReadOnlyBash,
     fastClassifierMaxTokens: validFastClassifierBudget(
         settings.fastClassifierMaxTokens,
       )
@@ -686,6 +739,8 @@ export function buildEffectiveConfigFromSources(
     classifyReadOnlyTools: DEFAULT_CLASSIFY_READ_ONLY_TOOLS,
     allowInsideWorkingDirectory: DEFAULT_ALLOW_INSIDE_WORKING_DIRECTORY,
     deniedPaths: [...DEFAULT_DENIED_PATHS],
+    allowReadOnlyBash: DEFAULT_ALLOW_READ_ONLY_BASH,
+    readOnlyRoots: [...DEFAULT_READ_ONLY_ROOTS],
     fastClassifierMaxTokens: DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
     classifierTimeoutMs: DEFAULT_CLASSIFIER_TIMEOUT_MS,
     maxUserTranscriptTokens: DEFAULT_MAX_USER_TRANSCRIPT_TOKENS,
@@ -715,6 +770,7 @@ export function buildEffectiveConfigFromSources(
   const allow = createRuleAccumulator(DEFAULT_ALLOW);
   const protectedPaths = createRuleAccumulator(DEFAULT_PROTECTED_PATHS);
   const deniedPaths = createRuleAccumulator(DEFAULT_DENIED_PATHS);
+  const readOnlyRoots = createRuleAccumulator(DEFAULT_READ_ONLY_ROOTS);
   const softDeny = createRuleAccumulator(DEFAULT_SOFT_DENY);
   const hardDeny = createRuleAccumulator(DEFAULT_HARD_DENY);
 
@@ -727,6 +783,11 @@ export function buildEffectiveConfigFromSources(
       deniedPaths,
       settings.autoMode?.deniedPaths,
       (entry) => entry.length <= MAX_WILDCARD_PATTERN_LENGTH,
+    );
+    applyRuleSetting(
+      readOnlyRoots,
+      settings.autoMode?.readOnlyRoots,
+      (entry) => readOnlyRootProblem(entry) === undefined,
     );
     applyRuleSetting(
       softDeny,
@@ -744,6 +805,7 @@ export function buildEffectiveConfigFromSources(
     allow: finalizeRuleSetting(allow),
     protectedPaths: finalizeRuleSetting(protectedPaths),
     deniedPaths: finalizeRuleSetting(deniedPaths),
+    readOnlyRoots: finalizeRuleSetting(readOnlyRoots),
     softDeny: finalizeRuleSetting(softDeny),
     hardDeny: finalizeRuleSetting(hardDeny),
   };

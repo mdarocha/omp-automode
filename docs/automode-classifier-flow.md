@@ -17,7 +17,7 @@ For each Pi `tool_call` event, the extension does this:
 9. If no accepted ask rule requires review, let the extension-owned `automode_inspect` tool run locally.
 10. Run path-deny checks, including recursive search scopes and symlink aliases.
 11. If an ask rule was accepted, skip all deterministic allow tiers.
-12. Otherwise, apply the inside-working-directory, `permissions.allow`, and read-only tiers in that order.
+12. Otherwise, apply the read-only-root, inside-working-directory, `permissions.allow`, read-only Bash, and read-only built-in tiers in that order. The read-only-root and read-only Bash tiers apply only when `readOnlyRoots` or `allowReadOnlyBash` is set.
 13. For a configured `typesafe/jev-*` classifier, evaluate typed policy questions in one native request.
 14. Otherwise, run the one-token conservative filter, followed by structured review when requested.
 15. Persist state and update the UI status and denial history.
@@ -226,6 +226,8 @@ Two optional fields change the deterministic tier. `deniedPaths` blocks matching
 Protected in-tree writes and edits do not use the local allow tier. They still reach the classifier.
 
 By default, both fields are off and `permissions.allow` is empty. Thus, every write and edit reaches the classifier.
+
+Two more opt-in tiers cover reads. `readOnlyRoots` lets `read`, `grep`, `find`, and `ls` calls inside the listed directories skip the classifier outside the working directory. `allowReadOnlyBash: true` lets a Bash command skip the classifier when static analysis shows that it only reads files. Both run after every denial check and never apply to a call that an accepted ask rule sent to the classifier. See [Read-only Bash and read-only roots](configuration.md#read-only-bash-and-read-only-roots).
 
 ## Protected paths
 

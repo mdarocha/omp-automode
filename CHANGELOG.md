@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Read-only Bash tier** — New opt-in `allowReadOnlyBash` (default `false`). A Bash command skips the classifier when static analysis shows it only reads files: allowlisted binaries and flags, static words, no redirects except `/dev/null`, no command substitution, no environment prefix, and every path checked against `deniedPaths`. Commands that write, run another program (`sed -i`, `find -exec`, `rg --pre`, `git -c`, pagers), or cannot be analyzed still go to the classifier. In one log of 6,929 Bash calls, 18% qualified, and none of the qualifying calls had been blocked by classifier policy.
+- **`readOnlyRoots`** — New opt-in list of absolute directories (default `[]`). `read`, `grep`, `find`, and `ls` calls inside a root skip the classifier outside the working directory. `deniedPaths`, protected paths, and symlink resolution still apply, and `write` and `edit` never use roots. Entries such as `/`, the home directory, and system roots are rejected. Neither setting can come from shared project `.pi/automode.json`.
+
 ### Fixed
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
 ## Fork features
