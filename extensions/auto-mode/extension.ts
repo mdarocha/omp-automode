@@ -97,6 +97,8 @@ import type {
 import { safeJson, truncateMiddle } from "./utils.ts";
 
 const INSPECT_TOOL = "automode_inspect";
+/** A reason may already end its sentence; the unavailable notice adds its own. */
+const TRAILING_PERIODS = /\.+$/;
 const INSPECTION_ACTIONS = ["status", "config", "defaults", "denials"] as const;
 type InspectionAction = (typeof INSPECTION_ACTIONS)[number];
 
@@ -347,7 +349,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
 
     function blockedToolReason(denial: DenialRecord): string {
       const cause = denial.kind === "classifier-unavailable"
-        ? `${denial.reason}. This is not a policy denial: auto mode could not review the action.`
+        ? `${denial.reason.replace(TRAILING_PERIODS, "")}. This is not a policy denial: auto mode could not review the action.`
         : denial.reason;
       return `[pi-automode] Action blocked; the tool did not run. ${cause} Do not claim success, rely on effects from this call, or attempt an equivalent workaround. Report the block to the user before continuing with dependent work. Independent work can continue.`;
     }

@@ -202,3 +202,15 @@ test("a classifier policy block keeps kind classifier and counts as a classifier
 	assert.equal(state.recentDenials.at(-1).kind, "classifier");
 	assert.equal(state.classifierDenied, 1);
 });
+
+test("the unavailable notice does not double the period of a reason that already ends a sentence", async () => {
+	for (const reason of ["No classifier model/API key available; auto mode fails closed.", "classifier unavailable (rate limited, retry in 53m)"]) {
+		const hook = await setupHookTest({
+			classifier: async () => ({ decision: "block", tier: "none", reason, failure: { kind: "auth", message: reason } }),
+		});
+		const result = await hook.emit("tool_call", { toolName: "bash", input: { command: "npm publish" } }, hook.ctx) as { reason?: string };
+		const text = result.reason ?? "";
+		assert.ok(text.includes(`${reason.replace(/\.$/, "")}. This is not a policy denial`), text);
+		assert.ok(!text.includes(".."), text);
+	}
+});
