@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
+- **OMP read selectors and path lists bypassed `deniedPaths`** — `read` and `grep` paths such as `~/.netrc:1-2`, `~/.config/gh/hosts.yml:raw`, `~/.ssh/id_ed25519:1+5`, `app.db:table:key`, `file.json?q=…`, `a;~/.netrc` and `:~/.netrc` resolved to a different file than the one OMP opened, so they skipped `deniedPaths`, `permissions.deny` read rules and the inside-working-directory tier. Pi-automode now checks the typed path, every list entry, and every prefix before a `:` or `?`. Allow tiers need every one of them to pass. Real file names with colons still match literally.
 ## Fork features
 
 - Fork `czottmann/pi-automode` as `royce-mathew/omp-automode`, preserving Carlo Zottmann's attribution and the upstream MIT license.

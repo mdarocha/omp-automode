@@ -54,6 +54,8 @@ Patterns support `~`, `$HOME`, and `${HOME}` expansion. The `*` wildcard matches
 
 Each pattern can contain at most 4,096 UTF-16 code units. Pi-automode matches the typed path and its symlink-resolved form. It also resolves the fixed path prefix of each pattern. Thus, a symlink alias cannot bypass a denied target.
 
+OMP's `read` and `grep` parse `path`. They peel line and `:raw` selectors (`~/.netrc:1-2`, `:-5`, `:2-4:raw`), address archive members and database tables (`app.db:users:7`), accept `?query` suffixes, and split `;`-, `,`- and whitespace-separated lists. Pi-automode checks the typed value, each list entry, and each prefix of an entry that ends before a `:` or `?`. A `deniedPaths` match on any of them blocks the call. The inside-working-directory tier and `permissions.allow` rules apply only when all of them pass. A file name that contains a colon still matches literally.
+
 If a recursive `grep` or `find` scope can contain a denied path, pi-automode blocks the call. A broad pattern such as `*.env` blocks these tools for every directory scope.
 
 A matching path blocks the call without classifier review or an override. The list applies only to file tools. The classifier governs `bash` path access. Both keys use the normal scalar and array precedence.
