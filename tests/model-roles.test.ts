@@ -176,10 +176,12 @@ test("the classifier fails closed with the reason when a role resolves to no usa
 	await withBridge(bridgeWith({ smol: SMOL }), async () => {
 		const noAuth = await defaultClassifyAction(ctx as never, baseConfig({ classifierModel: "@smol" }), "{}", "");
 		assert.equal(noAuth.decision, "block");
-		assert.match(noAuth.reason, /No classifier model\/API key available \(anthropic\/haiku: No API key\); auto mode fails closed\./);
+		assert.equal(noAuth.reason, "classifier unavailable (authentication failed: No API key)");
+		assert.equal(noAuth.failure?.kind, "auth");
 		const noModel = await defaultClassifyAction(ctx as never, baseConfig({ classifierModel: "@tiny" }), "{}", "");
 		assert.equal(noModel.decision, "block");
 		assert.match(noModel.reason, /@tiny resolves to no available model/);
+		assert.equal(noModel.failure?.kind, "auth");
 	});
 });
 

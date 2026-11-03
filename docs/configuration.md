@@ -42,7 +42,18 @@ A role selector expands to the role's complete OMP chain: the model assigned to 
 
 Under OMP, an unset `classifierModel` means `@smol`. If that role resolves to no available model, the current session model is used. Pi has no model roles, so an unset value still means the session model, and a role selector fails closed with a reason that names the missing OMP support.
 
-If a role or model cannot be resolved, or no model in the chain has credentials, the action is blocked. An explicit selector never falls back to the session model. `/automode status`, `/automode config`, and `automode_inspect` show the selector and the concrete model it resolves to, for example `@smol → anthropic/claude-haiku-5-5 +16 fallbacks`.
+If a role or model cannot be resolved, the action is blocked. An explicit selector never falls back to the session model. `/automode status`, `/automode config`, and `automode_inspect` show the selector and the concrete model it resolves to, for example `@smol → anthropic/claude-haiku-5-5 +16 fallbacks`.
+
+### Provider failures and fallback
+
+Each classifier failure gets a type: `rate_limit` (HTTP 429 or a rate or quota message), `timeout`, `server` (5xx, overload, dropped connections, and unrecognized provider errors), `auth` (401, 402, 403, missing credentials), `format` (an invalid decision, a truncated or non-`0`/`1` answer, a request the model rejects or cannot fit), and `aborted` (the session cancelled the action).
+
+- A `timeout` or `server` failure is retried once on the same model after a pause of 250 to 750 ms.
+- Any other failure, or a failed retry, moves to the next model in the role chain. The walk prefers a provider that has not failed yet, tries at most four models, and starts no new attempt once three `classifierTimeoutMs` have passed.
+- A `rate_limit` puts that provider on cooldown for the `retry-after` the provider gave (capped at 10 minutes, 60 seconds when it gave none). Until then, every model of that provider is skipped without a request, in every session of the process. `/automode reload` clears the cooldowns.
+- When no model can decide, the action is blocked with kind `classifier-unavailable` and a reason such as `classifier unavailable (rate limited, retry in 53m)`. The model sees that this is not a policy denial. These blocks do not count as classifier denials in the status counters.
+
+A single `provider/model-id` has no fallback, but it gets the same retry, cooldown, and typed block. Jev has no retry or fallback; its failures are typed and block as `classifier-unavailable`. The decision log's `classifier` entries record, for each attempt, the serving model, `errorKind`, and `retryAfterMs`.
 
 For Pi/OMP chat models, `classifierReasoningLevel` requests `low`, `medium`, `high`, `xhigh`, or `max` reasoning for both classifier stages. If the key is absent, pi-automode sends no reasoning preference. The server then selects the level.
 

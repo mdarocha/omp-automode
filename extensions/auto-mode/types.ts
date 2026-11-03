@@ -130,6 +130,7 @@ export type DenialRecord = {
     | "deterministic-hard-deny"
     | "deterministic-path-deny"
     | "classifier"
+    | "classifier-unavailable"
     | "setup";
 };
 
@@ -140,10 +141,28 @@ export type DecisionKind =
   | "read-only"
   | "inside-working-directory";
 
+/** Why a classifier call produced no usable decision. */
+export type ClassifierErrorKind =
+  | "rate_limit"
+  | "timeout"
+  | "server"
+  | "auth"
+  | "format"
+  | "aborted";
+
+export type ClassifierFailure = {
+  kind: ClassifierErrorKind;
+  message: string;
+  /** Delay the provider asked for before the next request, when it said so. */
+  retryAfterMs?: number;
+};
+
 export type ClassificationDecision = {
   decision: "allow" | "block";
   tier: "hard_deny" | "soft_deny" | "allow" | "explicit_intent" | "none";
   reason: string;
+  /** Set on a block that is a classifier failure rather than a policy decision. */
+  failure?: ClassifierFailure;
 };
 
 /** One classifier attempt: the raw model response (or error) and parsed decision. */
@@ -164,6 +183,12 @@ export type ClassifierIoAttempt = {
   };
   parsed?: ClassificationDecision;
   error?: string;
+  /** Typed cause when the attempt failed, set by the fallback walk. */
+  errorKind?: ClassifierErrorKind;
+  /** Delay the provider asked for after a failed attempt. */
+  retryAfterMs?: number;
+  /** Model that served the attempt (`provider/id`), set by the fallback walk. */
+  model?: string;
   durationMs: number;
 };
 
