@@ -70,10 +70,14 @@ export function createFakePi() {
 		commands,
 		tools,
 		async emit(event: string, payload: any, ctx: any) {
+			// Like OMP, a later handler that returns nothing keeps the result an
+			// earlier one produced, such as a revised tool input.
 			let lastResult: unknown;
 			for (const handler of handlers.get(event) ?? []) {
-				lastResult = await handler(payload, ctx);
-				if ((lastResult as { block?: boolean } | undefined)?.block) return lastResult;
+				const result = await handler(payload, ctx);
+				if (result === undefined) continue;
+				lastResult = result;
+				if ((result as { block?: boolean }).block) return result;
 			}
 			return lastResult;
 		},

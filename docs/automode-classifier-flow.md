@@ -15,7 +15,7 @@ For each Pi `tool_call` event, the extension does this:
 7. Mark an accepted ask call for required classifier review.
 8. Run deterministic hard-deny checks.
 9. If no accepted ask rule requires review, let the extension-owned `automode_inspect` tool run locally.
-10. Run path-deny checks, including recursive search scopes and symlink aliases.
+10. Run path-deny checks, including recursive search scopes and symlink aliases. OMP's `grep` is narrowed with exclusions instead of blocked when a scope can reach a denied path.
 11. If an ask rule was accepted, skip all deterministic allow tiers.
 12. Otherwise, apply the `scheme://` tier, then the inside-working-directory, `permissions.allow`, and read-only tiers in that order.
 13. For a configured `typesafe/jev-*` classifier, evaluate typed policy questions in one native request.
