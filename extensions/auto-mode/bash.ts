@@ -76,6 +76,8 @@ export type BashCommandAnalysis = {
   dynamic: boolean;
   dynamicName: boolean;
   dynamicShellScript: boolean;
+  /** True inside a loop or function body, which can run again after later commands. */
+  repeated: boolean;
   pos: number;
   end: number;
 };
@@ -85,6 +87,12 @@ export type BashAnalysis = {
   commands: BashCommandAnalysis[];
   redirects: BashRedirectAnalysis[];
   writeRedirectTargets: string[];
+  /**
+   * Write targets of redirects that belong to a compound command, a function
+   * definition, or a coprocess rather than to one simple command. They are also
+   * listed in `writeRedirectTargets`.
+   */
+  groupWriteRedirectTargets: string[];
   structure: string[];
   allowStructureSafe: boolean;
   errors: BashAnalysisError[];
@@ -422,6 +430,14 @@ function exhaustiveNode(_node: never): never {
   throw new Error(`Unsupported unbash AST node: ${JSON.stringify(_node)}`);
 }
 
+const REPEATED_NODE_TYPES: Partial<Record<Node["type"], true>> = {
+  While: true,
+  For: true,
+  Select: true,
+  ArithmeticFor: true,
+  Function: true,
+};
+
 /** Analyze Bash tool input or permission-pattern text without executing it. */
 export function analyzeBash(
   source: string,
@@ -433,6 +449,7 @@ export function analyzeBash(
     commands: [],
     redirects: [],
     writeRedirectTargets: [],
+    groupWriteRedirectTargets: [],
     structure: [],
     allowStructureSafe: true,
     errors: [],
@@ -460,6 +477,7 @@ export function analyzeBash(
     redirect: Redirect,
     currentSource: string,
     depth: number,
+    group = false,
   ): string | undefined {
     const redirectAnalysis = analyzeRedirect(redirect);
     analysis.redirects.push(redirectAnalysis);
@@ -470,7 +488,10 @@ export function analyzeBash(
     if (redirect.body) visitWord(redirect.body, currentSource, depth);
     const target = redirect.target?.value;
     const writeTarget = redirectWriteTarget(redirectAnalysis);
-    if (writeTarget) analysis.writeRedirectTargets.push(writeTarget);
+    if (writeTarget) {
+      analysis.writeRedirectTargets.push(writeTarget);
+      if (group) analysis.groupWriteRedirectTargets.push(writeTarget);
+    }
     return target;
   }
 
@@ -649,7 +670,28 @@ export function analyzeBash(
     }
   }
 
+  // Loop and function bodies can run again after later commands, so commands
+  // inside them cannot assume an earlier position in the script.
+  let repeatedDepth = 0;
+
   function visitNode(node: Node, nodeSource: string, depth: number): void {
+    if (!REPEATED_NODE_TYPES[node.type]) {
+      visitNodeContents(node, nodeSource, depth);
+      return;
+    }
+    repeatedDepth += 1;
+    try {
+      visitNodeContents(node, nodeSource, depth);
+    } finally {
+      repeatedDepth -= 1;
+    }
+  }
+
+  function visitNodeContents(
+    node: Node,
+    nodeSource: string,
+    depth: number,
+  ): void {
     analysis.structure.push(nodeStructureToken(node));
     if (
       node.type === "For" ||
@@ -727,6 +769,7 @@ export function analyzeBash(
             (!!node.name && !wordIsStatic(node.name)),
           dynamicShellScript:
             !!wrapper?.hasScriptArgument && wrapperSource === undefined,
+          repeated: repeatedDepth > 0,
           pos: node.pos,
           end: node.end,
         });
@@ -792,7 +835,7 @@ export function analyzeBash(
       case "Function":
         visitWord(node.name, nodeSource, depth);
         for (const redirect of node.redirects) {
-          visitRedirect(redirect, nodeSource, depth);
+          visitRedirect(redirect, nodeSource, depth, true);
         }
         visitNode(node.body, nodeSource, depth);
         return;
@@ -817,7 +860,7 @@ export function analyzeBash(
       case "Coproc":
         if (node.name) visitWord(node.name, nodeSource, depth);
         for (const redirect of node.redirects) {
-          visitRedirect(redirect, nodeSource, depth);
+          visitRedirect(redirect, nodeSource, depth, true);
         }
         visitNode(node.body, nodeSource, depth);
         return;
@@ -831,7 +874,7 @@ export function analyzeBash(
         return;
       case "Statement":
         for (const redirect of node.redirects) {
-          visitRedirect(redirect, nodeSource, depth);
+          visitRedirect(redirect, nodeSource, depth, true);
         }
         visitNode(node.command, nodeSource, depth);
         return;
