@@ -81,8 +81,6 @@ Jev evaluates typed policy questions in one request; code combines the answers w
 /automode model provider/model-id # save classifier model to ~/.pi/agent/extensions/pi-automode/config.json
 ```
 
-`/auto-mode` is an alias.
-
 ## Agent diagnostics
 
 The package registers one model-callable, read-only tool:
