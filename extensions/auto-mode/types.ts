@@ -107,6 +107,8 @@ export type EffectiveConfig = {
   permissionAsk: ToolPattern[];
   permissionAllow: ToolPattern[];
   log: LogConfig;
+  /** Scope that last set `enabled`; absent in hand-built configs, meaning `default`. */
+  enabledSource?: ConfigScope;
 };
 
 export type AutoModeState = {
@@ -117,6 +119,9 @@ export type AutoModeState = {
   classifierAllowed: number;
   classifierDenied: number;
   recentDenials: DenialRecord[];
+  /** Kind of the last decision. Unlike `lastReason`, it is safe to show the model. */
+  lastDecisionKind?: DecisionKind;
+  recentClassifierErrors: ClassifierErrorRecord[];
 };
 
 export type DenialRecord = {
@@ -140,10 +145,67 @@ export type DecisionKind =
   | "read-only"
   | "inside-working-directory";
 
+/** Why a classifier call failed closed. The first six are provider-call failures. */
+export type ClassifierErrorKind =
+  | "rate-limit"
+  | "timeout"
+  | "auth"
+  | "server"
+  | "aborted"
+  | "provider"
+  | "invalid-response"
+  | "context-limit"
+  | "no-classifier";
+
+export type ClassifierStage = "fast" | "detailed";
+
+/** Typed cause of a fail-closed classifier block. Carries no provider payload. */
+export type ClassifierFailure = {
+  kind: ClassifierErrorKind;
+  /** Stage that failed, when the failure happened inside one. */
+  stage?: ClassifierStage;
+  /** Wait the provider requested, when its error carried one. */
+  retryAfterMs?: number;
+};
+
+/** A recent fail-closed classifier failure, kept for `automode_inspect`. */
+export type ClassifierErrorRecord = ClassifierFailure & {
+  timestamp: number;
+  /** Classifier model, as `provider/id`, when one was resolved. */
+  model?: string;
+};
+
+/** Which enforcement stage produced a decision. */
+export type DecisionStage =
+  | "permissions"
+  | "hard-deny"
+  | "path"
+  | "inside-cwd"
+  | "allow"
+  | "read-only"
+  | "classifier-fast"
+  | "classifier-detailed";
+
+/** Settings scope that last set `autoMode.enabled`; `default` when none did. */
+export type ConfigScope = "default" | "global" | "project-local" | "inline";
+
+/** Where the effective enabled state came from. */
+export type EnabledSource = ConfigScope | "override" | "parent";
+
+/** Agent identity the host reports on the extension context (OMP `ctx.agent`). */
+export type AgentIdentity = {
+  kind?: string;
+  id?: string;
+  name?: string;
+  depth?: number;
+};
+
 export type ClassificationDecision = {
   decision: "allow" | "block";
   tier: "hard_deny" | "soft_deny" | "allow" | "explicit_intent" | "none";
   reason: string;
+  /** Set only when the classifier failed closed instead of judging the action. */
+  failure?: ClassifierFailure;
 };
 
 /** One classifier attempt: the raw model response (or error) and parsed decision. */

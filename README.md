@@ -89,18 +89,18 @@ The package registers one model-callable, read-only tool:
 
 `automode_inspect` accepts one `action`:
 
-- `status`: active state and counters
+- `status`: active state and counters, the last decision's kind, where the enabled state came from, the agent identity and `hasUI`, and recent typed classifier errors
 - `config`: active effective configuration, log path, and diagnostics
 - `defaults`: built-in rule lists
 - `denials`: recent denial timestamps, kinds, and tool names
 
 The tool reads the same in-memory configuration and state that the guardrail enforces. Permission and deterministic checks run before the bypass.
 
-The bypass does not change automode counters, persisted state, or observability logs. The extension verifies the source of the tool before it applies the exemption. Thus, a name collision does not exempt a tool from another extension.
+The bypass does not change automode counters or persisted state. It writes one `read-only` decision entry to the observability log when logging is on. The extension verifies the source of the tool before it applies the exemption. Thus, a name collision does not exempt a tool from another extension.
 
 The tool cannot enable or disable auto mode. It cannot reload configuration, reset state, select a model, or change configuration.
 
-Pi sends tool output to the current model. The `status` and `denials` views omit denial reasons and action payloads.
+Pi sends tool output to the current model. The `status` and `denials` views omit denial reasons and action payloads. `status` shows classifier errors by type only, never the provider's error text.
 
 If a diagnosis requires a reason, inspect a known-safe entry in the local observability log. The `config` view includes effective rule text. It removes raw JSON parser details from diagnostics.
 

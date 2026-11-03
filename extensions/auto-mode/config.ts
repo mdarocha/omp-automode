@@ -38,6 +38,7 @@ import type {
   AutoModeSettings,
   ClassifierReasoningLevel,
   ConfigLoadResult,
+  ConfigScope,
   EffectiveConfig,
   LoadedSettingsFile,
   LogConfig,
@@ -668,6 +669,22 @@ function appendPermissionPatterns(
   }
 }
 
+/** Scope whose `autoMode.enabled` wins, in the same order scalars are applied. */
+function enabledSourceOf(sources: SettingsSources): ConfigScope {
+  const scopes = [
+    ["global", sources.globalSettings],
+    ["project-local", sources.projectLocalSettings],
+    ["inline", sources.inlineSettings],
+  ] as const;
+  let source: ConfigScope = "default";
+  for (const [scope, files] of scopes) {
+    if (files?.some((file) => typeof file.autoMode?.enabled === "boolean")) {
+      source = scope;
+    }
+  }
+  return source;
+}
+
 /**
  * Merge settings with Claude Code-style precedence using Pi-owned config files.
  *
@@ -746,6 +763,7 @@ export function buildEffectiveConfigFromSources(
     deniedPaths: finalizeRuleSetting(deniedPaths),
     softDeny: finalizeRuleSetting(softDeny),
     hardDeny: finalizeRuleSetting(hardDeny),
+    enabledSource: enabledSourceOf(sources),
   };
 
   for (

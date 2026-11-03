@@ -34,6 +34,7 @@ import {
 import { deterministicHardDeny } from "./hard-deny.ts";
 import {
   createLogger,
+  decisionStage,
   newDecisionId,
   resolveLogPath,
   type Logger,
@@ -56,11 +57,14 @@ import {
 } from "./paths.ts";
 import {
   actionSummary,
+  agentIdentity,
   bindEnabledOverride,
+  enabledSource,
   type EnabledOverride,
   formatDenials,
   initialState,
   type PersistedState,
+  pushClassifierError,
   pushDenial,
   releaseEnabledOverride,
   restoreState,
@@ -74,8 +78,11 @@ import {
   loadedContextFromSystemPromptOptions,
 } from "./transcript.ts";
 import type {
+  AgentIdentity,
   AutoModeState,
+  ClassifierFailure,
   ClassifierReasoningLog,
+  ClassifierStage,
   ClassifyAction,
   ClassifyResult,
   ConfigLoadResult,
@@ -86,6 +93,7 @@ import type {
 import { safeJson, truncateMiddle } from "./utils.ts";
 
 const INSPECT_TOOL = "automode_inspect";
+const INSPECTION_ALLOW_REASON = "Extension-owned read-only inspection tool";
 const INSPECTION_ACTIONS = ["status", "config", "defaults", "denials"] as const;
 type InspectionAction = (typeof INSPECTION_ACTIONS)[number];
 
@@ -147,10 +155,54 @@ type LogCtx = {
   decisionId: string;
   classifierModel?: string;
   reasoning: ClassifierReasoningLog;
+  /** When the tool call reached the hook, for `durationMs`. */
+  startedAt: number;
+  agent?: AgentIdentity;
+  /** Set once the classifier ran: the stage that produced the decision. */
+  classifierStage?: ClassifierStage;
+  /** Set when the classifier failed closed. */
+  failure?: ClassifierFailure;
+  /** Model the classifier actually called, as `provider/id`. */
+  resolvedModel?: string;
 };
+
+/** Append one `decision` entry with the call's timing, stage, agent, and failure details. */
+function appendDecision(
+  ctx: ExtensionContext,
+  logCtx: LogCtx,
+  decision: {
+    tool: string;
+    summary: string;
+    kind: DecisionKind;
+    outcome: "allow" | "block";
+    reason: string;
+  },
+): void {
+  if (!logCtx.logger.enabled) return;
+  const { agent } = logCtx;
+  logCtx.logger.append({
+    type: "decision",
+    ts: new Date().toISOString(),
+    decisionId: logCtx.decisionId,
+    sessionId: ctx.sessionManager.getSessionId?.(),
+    cwd: ctx.cwd,
+    ...decision,
+    classifierModel: logCtx.classifierModel,
+    reasoning: logCtx.reasoning,
+    durationMs: Date.now() - logCtx.startedAt,
+    stage: decisionStage(decision.kind, logCtx.classifierStage),
+    agent: agent && { id: agent.id, name: agent.name, kind: agent.kind },
+    hasUI: ctx.hasUI,
+    errorKind: logCtx.failure?.kind,
+    retryAfterMs: logCtx.failure?.retryAfterMs,
+  });
+}
 
 /** Append ccusage-compatible usage and optional classifier I/O entries. */
 function logClassifierIo(decision: ClassifyResult, log: LogCtx): void {
+  log.failure = decision.failure;
+  log.classifierStage = decision.io?.attempts.at(-1)?.stage ?? decision.failure?.stage;
+  log.resolvedModel = decision.io?.model;
   if (decision.reasoning) log.reasoning = decision.reasoning;
   if (decision.io) log.reasoning = decision.io.reasoning;
   if (!log.logger.enabled || !decision.io) return;
@@ -281,11 +333,22 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
           state: {
             enabledOverride: enabledOverride.value,
             lastDecision: state.lastDecision,
+            lastDecisionKind: state.lastDecisionKind,
             checkedActions: state.checkedActions,
             blockedActions: state.blockedActions,
             classifierAllowed: state.classifierAllowed,
             classifierDenied: state.classifierDenied,
+            // Typed kind, time, and model only; provider error text and
+            // payloads never reach the model.
+            recentClassifierErrors: state.recentClassifierErrors.slice().reverse(),
           },
+          enabledSource: enabledSource(
+            cfg,
+            enabledOverride,
+            ctx.sessionManager.getSessionId?.(),
+          ),
+          agent: agentIdentity(ctx),
+          hasUI: ctx.hasUI,
         };
       }
       if (action === "config") {
@@ -336,25 +399,24 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       state.blockedActions += 1;
       state.lastDecision = "block";
       state.lastReason = denial.reason;
+      state.lastDecisionKind = denial.kind;
       pushDenial(state, denial);
-      persist();
-      updateUi(ctx);
-      if (logCtx.logger.enabled) {
-        logCtx.logger.append({
-          type: "decision",
-          ts: new Date().toISOString(),
-          decisionId: logCtx.decisionId,
-          sessionId: ctx.sessionManager.getSessionId?.(),
-          cwd: ctx.cwd,
-          tool: denial.toolName,
-          summary: denial.action,
-          kind: denial.kind,
-          outcome: "block",
-          reason: denial.reason,
-          classifierModel: logCtx.classifierModel,
-          reasoning: logCtx.reasoning,
+      if (denial.kind === "classifier" && logCtx.failure) {
+        pushClassifierError(state, {
+          ...logCtx.failure,
+          timestamp: denial.timestamp,
+          model: logCtx.resolvedModel ?? logCtx.classifierModel,
         });
       }
+      persist();
+      updateUi(ctx);
+      appendDecision(ctx, logCtx, {
+        tool: denial.toolName,
+        summary: denial.action,
+        kind: denial.kind,
+        outcome: "block",
+        reason: denial.reason,
+      });
       if (ctx.hasUI) {
         ctx.ui.notify(
           `Auto mode blocked ${denial.toolName}: ${denial.reason}`,
@@ -377,24 +439,16 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     ): undefined {
       state.lastDecision = "allow";
       state.lastReason = reason;
+      state.lastDecisionKind = kind;
       persist();
       updateUi(ctx);
-      if (logCtx.logger.enabled) {
-        logCtx.logger.append({
-          type: "decision",
-          ts: new Date().toISOString(),
-          decisionId: logCtx.decisionId,
-          sessionId: ctx.sessionManager.getSessionId?.(),
-          cwd: ctx.cwd,
-          tool: toolName,
-          summary,
-          kind,
-          outcome: "allow",
-          reason,
-          classifierModel: logCtx.classifierModel,
-          reasoning: logCtx.reasoning,
-        });
-      }
+      appendDecision(ctx, logCtx, {
+        tool: toolName,
+        summary,
+        kind,
+        outcome: "allow",
+        reason,
+      });
       return undefined;
     }
 
@@ -461,6 +515,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       const cfg = effectiveConfig();
       if (!cfg.enabled) return undefined;
 
+      const startedAt = Date.now();
       const input = event.input as Record<string, unknown>;
       const summary = actionSummary(event.toolName, input);
       const logCtx: LogCtx = {
@@ -477,6 +532,8 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         decisionId: newDecisionId(),
         classifierModel: cfg.classifierModel,
         reasoning: classifierReasoningForConfig(cfg.classifierReasoningLevel),
+        startedAt,
+        agent: agentIdentity(ctx),
       };
 
       if (ctx.signal?.aborted) {
@@ -612,7 +669,19 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         }, logCtx);
       }
 
-      if (isOwnedInspection && !askRequiresClassifier) return undefined;
+      if (isOwnedInspection && !askRequiresClassifier) {
+        // Inspection is not a decision about state: counters, the last
+        // decision, and persisted state stay untouched. It is still logged so
+        // the log shows every tool call auto mode let through.
+        appendDecision(ctx, logCtx, {
+          tool: event.toolName,
+          summary,
+          kind: "read-only",
+          outcome: "allow",
+          reason: INSPECTION_ALLOW_REASON,
+        });
+        return undefined;
+      }
       if (isOwnedInspection) state.checkedActions += 1;
 
       // Deterministic path gate for file tools.
