@@ -16,9 +16,19 @@ export type EnabledOverride = { value?: boolean };
 // OMP runs the extension factory again for each subagent, so closure state is
 // per session and a subagent would otherwise keep blocking after the user ran
 // `/automode off` in the main session. Module globals are shared by every
-// session in the process. Keyed by session file because that is what a
-// subagent's session header names as its parent.
-const enabledOverrideBySessionFile = new Map<string, EnabledOverride>();
+// session in the process. Each session is registered under its session file
+// and its session id, because a task subagent's header names its parent by
+// file while a `/tan` clone's header names it by id.
+const enabledOverrideBySessionKey = new Map<string, EnabledOverride>();
+
+/** The keys under which a session can be named as a parent: its file and its id. */
+function sessionKeys(ctx: ExtensionContext): string[] {
+  const keys = [
+    ctx.sessionManager.getSessionFile?.(),
+    ctx.sessionManager.getSessionId?.(),
+  ];
+  return keys.filter((key): key is string => typeof key === "string" && key !== "");
+}
 
 /**
  * Bind a starting session to its agent tree's override. An OMP subagent shares
@@ -26,8 +36,9 @@ const enabledOverrideBySessionFile = new Map<string, EnabledOverride>();
  * that are already running. Main sessions, forks, and subagents whose parent
  * is not in this process start from their own persisted choice.
  *
- * In-memory (`--no-session`) parents have no session file to link by; their
- * subagents keep the configured `enabled`, which fails closed.
+ * In-memory (`--no-session`) parents have no session file to link by, so their
+ * subagents inherit only when the header names the parent's session id.
+ * Otherwise they keep the configured `enabled`, which fails closed.
  */
 export function bindEnabledOverride(
   ctx: ExtensionContext,
@@ -38,13 +49,14 @@ export function bindEnabledOverride(
   const agent = "agent" in ctx ? ctx.agent : undefined;
   const isSubagent = typeof agent === "object" && agent !== null &&
     "kind" in agent && agent.kind === "sub";
-  const parentFile = isSubagent
+  const parent = isSubagent
     ? ctx.sessionManager.getHeader?.()?.parentSession
     : undefined;
-  const override = (parentFile ? enabledOverrideBySessionFile.get(parentFile) : undefined) ??
+  const override = (parent ? enabledOverrideBySessionKey.get(parent) : undefined) ??
     { value: persisted };
-  const sessionFile = ctx.sessionManager.getSessionFile?.();
-  if (sessionFile) enabledOverrideBySessionFile.set(sessionFile, override);
+  for (const key of sessionKeys(ctx)) {
+    enabledOverrideBySessionKey.set(key, override);
+  }
   return override;
 }
 
@@ -53,10 +65,11 @@ export function releaseEnabledOverride(
   ctx: ExtensionContext,
   override: EnabledOverride,
 ): void {
-  const sessionFile = ctx.sessionManager.getSessionFile?.();
-  // Only drop our own binding; another session may have bound this file since.
-  if (sessionFile && enabledOverrideBySessionFile.get(sessionFile) === override) {
-    enabledOverrideBySessionFile.delete(sessionFile);
+  for (const key of sessionKeys(ctx)) {
+    // Only drop our own binding; another session may have bound this key since.
+    if (enabledOverrideBySessionKey.get(key) === override) {
+      enabledOverrideBySessionKey.delete(key);
+    }
   }
 }
 

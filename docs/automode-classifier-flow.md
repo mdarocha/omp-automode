@@ -102,6 +102,8 @@ The effective configuration combines these sources:
 
 Before `session_start`, pi-automode loads only global and inline configuration. If `ctx.isProjectTrusted()` returns `true`, it reads project configuration during `session_start` and `/automode reload`.
 
+OMP never emits `session_start` for `/tan` clones. Pi-automode therefore initialises such a session on its first `before_agent_start` or `tool_call`, with the same steps as `session_start`: it loads the configuration for the session's own working directory and project trust, restores the persisted state, and binds the `/automode on|off` choice. A session that gets `session_start` later is initialised again.
+
 For an untrusted project, pi-automode ignores both project files. `/automode config` reports each ignored file that exists.
 
 Shared `.pi/automode.json` cannot change `autoMode` rules or add `permissions.allow`. A checked-in file must not reduce classifier coverage. If shared configuration contains `permissions.allow`, `/automode config` reports a diagnostic.
@@ -461,4 +463,4 @@ The classifier flow can be inspected or changed through slash commands:
 
 `/auto-mode` is an alias.
 
-`/automode off` disables the whole flow for the current session and its OMP subagents, including subagents that are already running. `/automode on` re-enables it for the same sessions. Subagents follow the main session only when the main session is saved to a session file; under `--no-session` they keep the configured `enabled` value. `/automode model` saves the classifier model to `~/.pi/agent/extensions/pi-automode/config.json`.
+`/automode off` disables the whole flow for the current session and its OMP subagents, including subagents that are already running. `/automode on` re-enables it for the same sessions. This covers `/tan` clones as well as task subagents. A subagent finds its parent by the parent's session file or session id, whichever its session header names. Subagents follow the main session only when the main session is saved to a session file; under `--no-session` they keep the configured `enabled` value. `/automode model` saves the classifier model to `~/.pi/agent/extensions/pi-automode/config.json`.
