@@ -17,7 +17,7 @@ For each Pi `tool_call` event, the extension does this:
 9. If no accepted ask rule requires review, let the extension-owned `automode_inspect` tool run locally.
 10. Run path-deny checks, including recursive search scopes and symlink aliases.
 11. If an ask rule was accepted, skip all deterministic allow tiers.
-12. Otherwise, apply the inside-working-directory, `permissions.allow`, and read-only tiers in that order.
+12. Otherwise, apply the `scheme://` tier, then the inside-working-directory, `permissions.allow`, and read-only tiers in that order.
 13. For a configured `typesafe/jev-*` classifier, evaluate typed policy questions in one native request.
 14. Otherwise, run the one-token conservative filter, followed by structured review when requested.
 15. Persist state and update the UI status and denial history.
@@ -232,6 +232,8 @@ Two optional fields change the deterministic tier. `deniedPaths` blocks matching
 `allowInsideWorkingDirectory: true` allows file access inside the working directory without classifier review. This access includes writes and edits. Pi-automode sends all out-of-tree file access to the classifier, including reads.
 
 Protected in-tree writes and edits do not use the local allow tier. They still reach the classifier.
+
+A `scheme://` path is not a filesystem path. Pi-automode splits file-tool paths into URL entries and filesystem entries before it resolves anything. Reads of built-in OMP schemes (`skill`, `local`, `artifact`, `omp`, `history`, `issue`, `pr`, `mr`, `agent`, `proc`, `mcp`, `xd`) are allowed locally and logged with kind `url-scheme`. Every other scheme, including `http`, `https`, `ssh`, and server-defined MCP resource schemes, reaches the classifier even when `classifyReadOnlyTools` is off. A write to `xd://<tool>` is allowed because OMP runs the named tool as a nested call that emits its own `tool_call`. A write to `local://` follows `allowInsideWorkingDirectory`. Writes to `proc://`, `agent://`, `ssh://`, and any other scheme reach the classifier.
 
 By default, both fields are off and `permissions.allow` is empty. Thus, every write and edit reaches the classifier.
 
