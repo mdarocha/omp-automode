@@ -36,4 +36,4 @@ The classifier policy defines denial tiers and rule-list syntax. See [Defaults a
 
 ## Status
 
-**AM status line** — The persistent TUI footer that starts with `AM`. It reports the auto-mode state and action counts.
+**Status segment** — The compact TUI status that starts with an icon: `<icon> auto`, `<icon> auto · N blocked`, `<icon> checking…`, or `<icon> off`.

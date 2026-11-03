@@ -80,17 +80,38 @@ export function pushDenial(state: AutoModeState, denial: DenialRecord): void {
   ];
 }
 
-/** `config` is the effective config, with any `/automode on|off` choice applied. */
+/** Icon for themes that expose no glyphs, such as Pi's. */
+export const FALLBACK_STATUS_ICON = "●";
+
+/** The slice of an OMP theme used to pick the status icon. Pi themes have neither field. */
+export type StatusTheme = {
+  cmd?: { shield?: string };
+  icon?: { auto?: string };
+};
+
+/**
+ * OMP's `cmd.shield` glyph follows the symbol preset (unicode, nerd). The ascii
+ * preset leaves it empty, so fall back to `icon.auto`, then to a plain glyph.
+ */
+export function statusIcon(theme: StatusTheme | undefined): string {
+  return theme?.cmd?.shield || theme?.icon?.auto || FALLBACK_STATUS_ICON;
+}
+
+/**
+ * One compact segment: `<icon> auto`, `<icon> auto · N blocked`, `<icon> off`,
+ * or `<icon> checking…` while a classifier call is in flight. `config` is the
+ * effective config, with any `/automode on|off` choice applied.
+ */
 export function statusLine(
   config: EffectiveConfig,
   state: AutoModeState,
+  icon: string,
+  checking = false,
 ): string {
-  const circle = config.enabled ? "●" : "○";
-  const allowed = state.checkedActions - state.blockedActions;
-  const classifier = state.classifierAllowed > 0 || state.classifierDenied > 0
-    ? ` ca:${state.classifierAllowed} cd:${state.classifierDenied}`
-    : "";
-  return `AM ${circle} a:${allowed} d:${state.blockedActions}${classifier}`;
+  if (!config.enabled) return `${icon} off`;
+  if (checking) return `${icon} checking…`;
+  if (state.blockedActions > 0) return `${icon} auto · ${state.blockedActions} blocked`;
+  return `${icon} auto`;
 }
 
 /** `config` is the effective config, with any `/automode on|off` choice applied. */

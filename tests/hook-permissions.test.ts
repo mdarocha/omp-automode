@@ -217,7 +217,7 @@ test("tool_call records cancelled actions without Bash analysis or classificatio
 		assert.equal(state.recentDenials[0].reason, "Cancelled");
 		assert.match(state.recentDenials[0].action, /echo safe/);
 
-		assert.match(ctx.statuses.at(-1)?.text ?? "", /d:1/);
+		assert.match(ctx.statuses.at(-1)?.text ?? "", /auto · 1 blocked$/);
 		assert.deepEqual(ctx.notifications.at(-1), {
 			message: "Auto mode blocked bash: Cancelled",
 			type: "warning",
