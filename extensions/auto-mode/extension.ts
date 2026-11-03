@@ -14,6 +14,12 @@ import {
   serializeClassifierAction,
 } from "./classifier.ts";
 import {
+  agentIdentity,
+  createHubEntry,
+  globalHubRegistry,
+  type HubEntry,
+} from "./agent-hub.ts";
+import {
   agentIdOf,
   ASK_DIALOG_TITLE,
   askDialogMessage,
@@ -284,6 +290,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     let loadedContext = "";
     /** Classifier calls awaiting a model response; parallel tool calls can overlap. */
     let classifierCallsInFlight = 0;
+    let hubEntry: HubEntry | undefined;
     let globalConfigNoticeShown = false;
     let sessionRecord: SessionRecord | undefined;
     // Dialogs this session has open in an ancestor's UI, closed on shutdown.
@@ -306,6 +313,15 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       // Register on both start paths: a `/tan` clone's subagents also look
       // their ancestors up in this registry.
       sessionRecord = registerSession(ctx);
+      // The Agent Hub entry is made here too, so a `/tan` clone shows up as
+      // `Tan-<id>-automode` although it never gets `session_start`.
+      hubEntry?.dispose();
+      hubEntry = undefined;
+      const agent = agentIdentity(ctx);
+      const registry = agent ? globalHubRegistry(pi) : undefined;
+      if (agent && registry) {
+        hubEntry = createHubEntry(registry, agent);
+      }
       sessionInit = source;
     }
 
@@ -450,6 +466,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       pushDenial(state, denial);
       persist();
       updateUi(ctx);
+      hubEntry?.decided("block", denial.toolName, denial.action);
       if (logCtx.logger.enabled) {
         logCtx.logger.append({
           type: "decision",
@@ -490,6 +507,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       state.lastReason = reason;
       persist();
       updateUi(ctx);
+      hubEntry?.decided("allow", toolName, summary);
       if (logCtx.logger.enabled) {
         logCtx.logger.append({
           type: "decision",
@@ -526,6 +544,8 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     });
 
     pi.on("session_shutdown", (_event, ctx) => {
+      hubEntry?.dispose();
+      hubEntry = undefined;
       releaseEnabledOverride(ctx, enabledOverride);
       sessionInit = undefined;
       if (sessionRecord) {
@@ -917,6 +937,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
 
       classifierCallsInFlight += 1;
       updateUi(ctx);
+      hubEntry?.classifyStarted(event.toolName, summary);
       let decision: ClassifyResult;
       try {
         decision = await classify(
@@ -928,6 +949,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         );
       } finally {
         classifierCallsInFlight -= 1;
+        hubEntry?.classifyFinished();
         updateUi(ctx);
       }
       logClassifierIo(decision, logCtx);
