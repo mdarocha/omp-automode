@@ -54,7 +54,7 @@ test("automode exposes one read-only inspection tool", () => {
 	const fake = createFakePi();
 	createPiAutomode({ loadConfig: () => baseConfig() })(fake.pi);
 	assert.deepEqual([...fake.tools.keys()], ["automode_inspect"]);
-	assert.deepEqual([...fake.commands.keys()], ["automode", "auto-mode"]);
+	assert.deepEqual([...fake.commands.keys()], ["automode"]);
 });
 
 test("global config path uses the extension data directory", () => {
