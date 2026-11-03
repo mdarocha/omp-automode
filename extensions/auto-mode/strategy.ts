@@ -72,3 +72,43 @@ export function judgeVerdict(
   }
   return { allow: false, tier: "none", reason: `soft_deny not ruled out (${summary})` };
 }
+
+/** What a judge-role candidate is, as classified by OMP's `kindOf`. */
+export type JudgeKind = "native" | "local" | "online";
+/** Why the judge stage was skipped when no candidate in the chain is calibrated. */
+export const NO_CALIBRATED_JUDGE = "judge-unavailable: no calibrated judge";
+
+/**
+ * Run `run` on the first calibrated judge in `chain`. Only a `native` judge
+ * (TypeSafe Jev) returns real probabilities. A prompted chat model answers
+ * one-hot (0 or 1), so `judgeConfidence` cannot gate it, and an on-device
+ * model is too weak to approve anything. Both are skipped. When no native
+ * candidate could run, the error is `NO_CALIBRATED_JUDGE`, so the caller
+ * escalates as if no judge existed.
+ */
+export async function withCalibratedJudge<Judge, T>(
+  chain: {
+    withCandidate<R>(
+      run: (judge: Judge, kind: JudgeKind) => Promise<R>,
+      options?: { signal?: AbortSignal },
+    ): Promise<R>;
+  },
+  run: (judge: Judge) => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  let calibratedRan = false;
+  try {
+    return await chain.withCandidate(async (judge, kind) => {
+      if (kind !== "native") {
+        throw new Error(`${kind} judge skipped: not calibrated`);
+      }
+      calibratedRan = true;
+      return run(judge);
+    }, { signal });
+  } catch (error) {
+    if (calibratedRan || signal?.aborted) {
+      throw error;
+    }
+    throw new Error(NO_CALIBRATED_JUDGE, { cause: error });
+  }
+}

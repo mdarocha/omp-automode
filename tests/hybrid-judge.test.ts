@@ -18,7 +18,10 @@ import {
 	type JudgeOutcome,
 	type JudgeProbabilities,
 	type JudgeRequest,
+	type JudgeKind,
 	type OmpBridge,
+	NO_CALIBRATED_JUDGE,
+	withCalibratedJudge,
 } from "../extensions/auto-mode.ts";
 import { baseConfig, baseState, createFakeCtx, createFakePi } from "./test-helpers.ts";
 
@@ -266,4 +269,87 @@ test("the tool hook sends ask-forced and eval actions past the judge", async () 
 	await fake.emit("tool_call", { toolName: "eval", input: { code: "1+1" } }, ctx);
 	await fake.emit("tool_call", { toolName: "bash", input: { command: "npm publish" } }, ctx);
 	assert.deepEqual(seen.map(({ tool, options }) => [tool, options?.skipJudge]), [["bash", false], ["eval", true], ["bash", true]]);
+});
+
+type FakeCandidate = { kind: JudgeKind; probabilities?: JudgeProbabilities; fail?: Error };
+
+/** A judge chain like OMP's `ChainJudge`: tries each candidate, moving on after a throw. */
+function fakeChain(candidates: FakeCandidate[], ran: JudgeKind[]) {
+	return {
+		async withCandidate<R>(run: (judge: FakeCandidate, kind: JudgeKind) => Promise<R>): Promise<R> {
+			let last: unknown = new Error("judgment: no judge candidate");
+			for (const candidate of candidates) {
+				try {
+					return await run(candidate, candidate.kind);
+				} catch (error) {
+					last = error;
+				}
+			}
+			throw last;
+		},
+		ran,
+	};
+}
+
+/** A bridge whose `judge` is the real calibrated-only selection over a fake chain. */
+function bridgeOverChain(candidates: FakeCandidate[], ran: JudgeKind[]): (request: JudgeRequest) => Promise<JudgeOutcome> {
+	const chain = fakeChain(candidates, ran);
+	return (request) =>
+		withCalibratedJudge(chain, async (candidate) => {
+			ran.push(candidate.kind);
+			if (candidate.fail) {
+				throw candidate.fail;
+			}
+			return outcome(candidate.probabilities!);
+		}, request.signal);
+}
+
+test("a chat judge never approves: its one-hot answer is skipped and the detailed classifier decides", async () => {
+	const ran: JudgeKind[] = [];
+	const oneHotSafe = { hard_deny: 0, soft_deny: 0, allow_exception: 0, direct_authorization: 0 };
+	await withHybrid(CLASSIFIER_ALLOW, bridgeOverChain([{ kind: "online", probabilities: oneHotSafe }, { kind: "local", probabilities: oneHotSafe }], ran), async ({ ctx, requests }) => {
+		const result = await defaultClassifyAction(ctx, baseConfig({ classifierStrategy: "hybrid", classifierModel: "@smol" }), ACTION, "");
+		assert.deepEqual(ran, [], "no chat or local candidate was asked");
+		assert.equal(result.reason, "detailed ok", "the classifier decided, not the judge");
+		assert.deepEqual(requests, [{ detailed: true }]);
+		assert.deepEqual(result.io?.attempts.map((attempt) => attempt.stage), ["judge", "detailed"]);
+		assert.equal(result.io?.attempts[0]?.error, NO_CALIBRATED_JUDGE);
+		assert.equal(NO_CALIBRATED_JUDGE, "judge-unavailable: no calibrated judge");
+	});
+});
+
+test("a native judge above the threshold approves, even after a chat candidate was skipped", async () => {
+	const ran: JudgeKind[] = [];
+	await withHybrid(CLASSIFIER_ALLOW, bridgeOverChain([{ kind: "online", probabilities: SAFE }, { kind: "native", probabilities: SAFE }], ran), async ({ ctx, requests }) => {
+		const result = await defaultClassifyAction(ctx, baseConfig({ classifierStrategy: "hybrid", classifierModel: "@smol" }), ACTION, "");
+		assert.deepEqual(ran, ["native"]);
+		assert.equal(result.decision, "allow");
+		assert.match(result.reason, /^Judge openrouter\/typesafe\/jev-1\.14 cleared the action/);
+		assert.deepEqual(requests, []);
+	});
+});
+
+test("a native judge below the threshold escalates to the detailed classifier", async () => {
+	const ran: JudgeKind[] = [];
+	await withHybrid(CLASSIFIER_ALLOW, bridgeOverChain([{ kind: "native", probabilities: { ...SAFE, soft_deny: 0.5 } }], ran), async ({ ctx, requests }) => {
+		const result = await defaultClassifyAction(ctx, baseConfig({ classifierStrategy: "hybrid", classifierModel: "@smol" }), ACTION, "");
+		assert.deepEqual(ran, ["native"]);
+		assert.equal(result.reason, "detailed ok");
+		assert.deepEqual(requests, [{ detailed: true }]);
+		assert.match(result.io?.attempts[0]?.error ?? "", /^escalated: soft_deny not ruled out/);
+	});
+});
+
+test("a failing native judge keeps its own error; only a chain without a calibrated judge reports none", async () => {
+	const boom = new Error("judgment: 503");
+	await assert.rejects(
+		withCalibratedJudge(fakeChain([{ kind: "online" }, { kind: "native" }], []), async () => {
+			throw boom;
+		}),
+		boom,
+	);
+	await assert.rejects(withCalibratedJudge(fakeChain([{ kind: "online" }], []), async () => "x"), { message: NO_CALIBRATED_JUDGE });
+	await assert.rejects(withCalibratedJudge(fakeChain([], []), async () => "x"), { message: NO_CALIBRATED_JUDGE });
+	const aborted = AbortSignal.abort(new Error("timed out"));
+	await assert.rejects(withCalibratedJudge(fakeChain([{ kind: "online" }], []), async () => "x", aborted), { message: /judge skipped|timed out/ });
 });

@@ -32,9 +32,9 @@ export type OmpBridge = {
    */
   roleChain(role: string, registry: ExtensionModelRegistry): Model<any>[];
   /**
-   * Answer the four policy questions through OMP's `judge` role chain: native
-   * judges (TypeSafe Jev and similar) and chat models, never on-device models.
-   * Rejects when no candidate can answer.
+   * Answer the four policy questions through OMP's `judge` role chain, using
+   * only calibrated native judges (TypeSafe Jev). Chat and on-device
+   * candidates are skipped. Rejects when no calibrated candidate can answer.
    */
   judge(request: JudgeRequest): Promise<JudgeOutcome>;
 };

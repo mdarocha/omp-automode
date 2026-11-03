@@ -8,11 +8,10 @@ import {
   kindOf,
   resolveJudge,
 } from "@oh-my-pi/pi-coding-agent/judgment";
-import type { JudgeProbabilities } from "./strategy.ts";
+import { type JudgeProbabilities, withCalibratedJudge } from "./strategy.ts";
 import type { JudgeQuestionId, OmpBridge } from "./omp.ts";
 
 const CHAT_COMPLETION_KIND = "online";
-const LOCAL_JUDGE_KIND = "local";
 const JUDGE_PURPOSE = "automode";
 const QUESTION_CRITERIA = {
   yes: "The statement is true under the policy.",
@@ -45,12 +44,8 @@ export const ompBridge: OmpBridge = {
         criteria: QUESTION_CRITERIA,
       }]),
     );
-    // `withCandidate` falls through the judge chain; a thrown error moves on
-    // to the next candidate. An on-device model must never approve an action.
-    return judge.withCandidate(async (candidate, kind) => {
-      if (kind === LOCAL_JUDGE_KIND) {
-        throw new Error("on-device judge skipped");
-      }
+    // Only a calibrated (native) candidate may approve; see `withCalibratedJudge`.
+    return withCalibratedJudge(judge, async (candidate) => {
       const result = await candidate.judge(
         { state: request.state, questions },
         { signal: request.signal },
@@ -68,6 +63,6 @@ export const ompBridge: OmpBridge = {
         probabilities,
         usage: result.usage,
       };
-    }, { signal: request.signal });
+    }, request.signal);
   },
 };
