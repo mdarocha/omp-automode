@@ -8,6 +8,7 @@ import {
 	createPiAutomode,
 	type AutoModeState,
 	type ClassificationDecision,
+	type ClassifyHints,
 	type EffectiveConfig,
 } from "../extensions/auto-mode.ts";
 
@@ -190,10 +191,12 @@ export async function setupHookTest(options: {
 } = {}) {
 	const fake = createFakePi();
 	let classifierCalls = 0;
+	const classifierHints: Array<ClassifyHints | undefined> = [];
 	const classifier = options.classifier ?? (async () => ({ decision: "allow", tier: "none", reason: "test allow" }));
 	createPiAutomode({
 		loadConfig: () => options.config ?? baseConfig(),
-		classifyAction: async () => {
+		classifyAction: async (_ctx, _config, _action, _loadedContext, hints) => {
+			classifierHints.push(hints);
 			classifierCalls += 1;
 			return classifier();
 		},
@@ -201,5 +204,10 @@ export async function setupHookTest(options: {
 	})(fake.pi);
 	const ctx = options.ctx ?? createFakeCtx(fake.entries);
 	await fake.emit("session_start", { type: "session_start" }, ctx);
-	return { ...fake, ctx, get classifierCalls() { return classifierCalls; } };
+	return {
+		...fake,
+		ctx,
+		get classifierCalls() { return classifierCalls; },
+		get classifierHints() { return classifierHints; },
+	};
 }

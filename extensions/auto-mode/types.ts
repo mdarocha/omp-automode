@@ -200,9 +200,18 @@ export type ConfigLoadResult = {
   diagnostics: string[];
 };
 
+/** Extra, extension-authored context for the classifier about one action. */
+export type ClassifyHints = {
+  /** Skip the 0/1 gate and send the action straight to the detailed review. */
+  skipFastStage?: boolean;
+  /** Static-analysis findings shown to the classifier beside the action. */
+  notes?: string[];
+};
+
 export type ClassifyAction = (
   ctx: ExtensionContext,
   config: EffectiveConfig,
   action: string,
   loadedContext: string,
+  hints?: ClassifyHints,
 ) => Promise<ClassifyResult>;

@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **OMP `eval` analysis** — `permissions.deny`, `permissions.ask`, and `permissions.allow` now accept `eval(...)` patterns matched against the cell code, optionally scoped as `eval(py: ...)` or `eval(js: ...)`. Literal shell commands in Python (`subprocess.*`, `os.system`, `os.popen`, IPython `!cmd` and `%%bash`) and JavaScript (`child_process`, Bun's `$` and `Bun.spawn`) are extracted and run through `bash(...)` rules and the deterministic hard-deny checks. Code with commands the scanner cannot read (f-strings, variables, `getattr`, `__import__`, `exec`, aliases, and similar) is opaque: it never matches `permissions.allow`, never uses the fast classifier stage, and the classifier is told why. The scan is lexical and best-effort, not a sandbox. In 564 real `eval` calls, 83 contained subprocess, `rm -rf`, `git push`, or `gh pr create` text that no pattern could match, and 22 evals were fast-allowed.
+
 ### Fixed
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
 ## Fork features

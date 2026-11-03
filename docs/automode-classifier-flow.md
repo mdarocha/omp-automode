@@ -24,6 +24,8 @@ For each Pi `tool_call` event, the extension does this:
 
 The default posture is fail-closed. If model resolution, authentication, a classifier call, or response parsing fails, pi-automode blocks the action.
 
+For OMP's `eval` tool, steps 4, 5, and 8 also run on every shell command pi-automode can extract from the code literally, as if it were a `bash` call. Step 12 never lets an opaque eval (code with commands the scanner cannot read) use `permissions.allow`, and step 14 skips the one-token filter for it. See [Eval tool](configuration.md#eval-tool).
+
 ## Diagram
 
 ```mermaid
