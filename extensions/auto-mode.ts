@@ -20,6 +20,7 @@ export * from "./auto-mode/permissions.ts";
 export * from "./auto-mode/state.ts";
 export * from "./auto-mode/transcript.ts";
 export * from "./auto-mode/types.ts";
+export * from "./auto-mode/url-schemes.ts";
 
 import { createPiAutomode } from "./auto-mode/extension.ts";
 
