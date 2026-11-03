@@ -178,6 +178,7 @@ export function baseState(overrides: Partial<AutoModeState> = {}): AutoModeState
 		classifierAllowed: 0,
 		classifierDenied: 0,
 		recentDenials: [],
+		recentClassifierErrors: [],
 		...overrides,
 	};
 }

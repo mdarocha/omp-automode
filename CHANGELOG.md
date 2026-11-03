@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Richer `automode_inspect` status** — `status` now reports the kind of the last decision (never its reason), where the enabled state came from (config scope, `/automode` override, or inherited from the parent agent), the agent identity and `hasUI`, and the last 12 classifier provider errors as typed kind, stage, timestamp, and model. Provider error text and payloads stay out of the model-visible output.
+- **Decision log fields** — `decision` entries gain `durationMs`, `stage` (`permissions`, `hard-deny`, `path`, `inside-cwd`, `allow`, `read-only`, `classifier-fast`, `classifier-detailed`), `agent` (`id`, `name`, `kind`), and `hasUI`. A fail-closed classifier block also records `errorKind` and, when the provider sent one, `retryAfterMs`. The fields are additive; older readers are unaffected.
+- **`automode_inspect` calls are logged** as `read-only` decisions. They still change no counters or state.
+
 ### Fixed
 - **Subagents follow `/automode on|off`** — OMP subagents now use the main session's `/automode on` or `/automode off` choice, including subagents that are already running. Previously each subagent used the configured `enabled` value, so subagents kept blocking after `/automode off`. Under `--no-session`, subagents still use the configured value
 ## Fork features

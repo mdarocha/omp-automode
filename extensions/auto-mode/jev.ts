@@ -1,3 +1,4 @@
+import { classifyProviderError } from "./classifier-errors.ts";
 import { jevModelId } from "./model.ts";
 import type {
   ClassificationDecision,
@@ -80,6 +81,7 @@ export async function classifyWithJev(
     return {
       decision: "block", tier: "none", reasoning,
       reason: "Jev requires TYPESAFE_API_KEY and a typesafe/jev-* classifier model; auto mode fails closed.",
+      failure: { kind: "no-classifier" },
     };
   }
   const state = { context, action };
@@ -100,6 +102,7 @@ export async function classifyWithJev(
     return {
       decision: "block", tier: "none", reasoning,
       reason: "Exact tool input cannot fit in Jev's context without truncation; auto mode fails closed.",
+      failure: { kind: "context-limit", stage: "detailed" },
     };
   }
 
@@ -113,6 +116,7 @@ export async function classifyWithJev(
   controller.signal.addEventListener("abort", onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), config.classifierTimeoutMs);
   let failureReason = "Jev request failed; auto mode fails closed.";
+  let invalidResponse = false;
   let decision: ClassificationDecision;
   try {
     if (signal?.aborted) controller.abort();
@@ -135,6 +139,7 @@ export async function classifyWithJev(
         const text = await response.text();
         controller.signal.throwIfAborted();
         failureReason = "Jev returned an invalid response; auto mode fails closed.";
+        invalidResponse = true;
         const raw: unknown = JSON.parse(text);
         if (!isJevResponse(raw)) throw new Error("Invalid Jev response");
         const answers = raw.answers;
@@ -175,7 +180,14 @@ export async function classifyWithJev(
         ? "Jev request was aborted; auto mode fails closed."
         : "Jev request timed out; auto mode fails closed.";
     }
-    decision = { decision: "block", tier: "none", reason: failureReason };
+    decision = {
+      decision: "block",
+      tier: "none",
+      reason: failureReason,
+      failure: invalidResponse
+        ? { kind: "invalid-response", stage: "detailed" }
+        : { ...classifyProviderError(failureReason, signal?.aborted ? "aborted" : undefined), stage: "detailed" },
+    };
     attempts.push({ stage: "detailed", attempt: 1, error: failureReason, durationMs: Date.now() - started });
   } finally {
     clearTimeout(timer);

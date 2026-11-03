@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,7 +17,7 @@ import {
 	setupHookTest,
 } from "./test-helpers.ts";
 
-test("automode_inspect bypasses classification without changing state or logs", async () => {
+test("automode_inspect bypasses classification without changing state and logs a read-only allow", async () => {
 	const dir = mkdtempSync(join(os.tmpdir(), "pi-automode-inspect-"));
 	try {
 		const allow = parseToolPattern("bash(git status*)");
@@ -39,7 +39,13 @@ test("automode_inspect bypasses classification without changing state or logs", 
 		assert.equal(result, undefined);
 		assert.equal(hook.classifierCalls, 0);
 		assert.equal(hook.entries.length, 0);
-		assert.equal(existsSync(join(dir, "session-pi-automode.jsonl")), false);
+		const logged = readFileSync(join(dir, "session-pi-automode.jsonl"), "utf8").trim().split("\n")
+			.map((line) => JSON.parse(line));
+		assert.equal(logged.length, 1);
+		assert.equal(logged[0].tool, "automode_inspect");
+		assert.equal(logged[0].outcome, "allow");
+		assert.equal(logged[0].kind, "read-only");
+		assert.equal(logged[0].stage, "read-only");
 
 		const output = await hook.tools.get("automode_inspect")?.execute(
 			"call-1",

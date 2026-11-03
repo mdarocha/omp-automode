@@ -6,9 +6,44 @@ import type {
   ClassifierIo,
   ClassifierIoAttempt,
   ClassifierReasoningLog,
+  AgentIdentity,
+  ClassifierErrorKind,
+  ClassifierStage,
   ClassificationDecision,
   DecisionKind,
+  DecisionStage,
 } from "./types.ts";
+
+const CLASSIFIER_STAGE_BY_MODEL_STAGE: Record<ClassifierStage, DecisionStage> = {
+  fast: "classifier-fast",
+  detailed: "classifier-detailed",
+};
+
+const STAGE_BY_KIND: Partial<Record<DecisionKind, DecisionStage>> = {
+  "permissions.deny": "permissions",
+  "permissions.ask": "permissions",
+  "deterministic-hard-deny": "hard-deny",
+  "deterministic-path-deny": "path",
+  "inside-working-directory": "inside-cwd",
+  "permissions.allow": "allow",
+  "read-only": "read-only",
+};
+
+/**
+ * Enforcement stage behind a decision. `setup` decisions and classifier
+ * decisions that never reached a model call have none.
+ */
+export function decisionStage(
+  kind: DecisionKind,
+  classifierStage?: ClassifierStage,
+): DecisionStage | undefined {
+  if (kind === "classifier") {
+    return classifierStage === undefined
+      ? undefined
+      : CLASSIFIER_STAGE_BY_MODEL_STAGE[classifierStage];
+  }
+  return STAGE_BY_KIND[kind];
+}
 
 /** A final allow/block decision for a tool call. */
 export type DecisionLogEntry = {
@@ -24,6 +59,17 @@ export type DecisionLogEntry = {
   reason: string;
   classifierModel?: string;
   reasoning: ClassifierReasoningLog;
+  /** Time from tool-call receipt to this decision, including any wait on a user prompt. */
+  durationMs?: number;
+  /** Enforcement stage that decided. Absent for `setup` decisions and when no model call ran. */
+  stage?: DecisionStage;
+  /** Agent that issued the call, when the host reports one (OMP). */
+  agent?: Pick<AgentIdentity, "id" | "name" | "kind">;
+  hasUI?: boolean;
+  /** Typed cause when the classifier failed closed. */
+  errorKind?: ClassifierErrorKind;
+  /** Wait the provider requested for a classifier failure, in milliseconds. */
+  retryAfterMs?: number;
 };
 
 /** The classifier prompt, raw responses, and parsed decision for one action. */
