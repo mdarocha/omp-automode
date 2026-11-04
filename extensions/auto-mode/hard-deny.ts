@@ -12,6 +12,7 @@ import { HOME } from "./constants.ts";
 import {
   isProfileOrAuthorizedKeysPath,
   isSafetyControlPath,
+  LOADED_EXTENSION_PATHS,
   resolveInputPath,
   resolvePathForPolicy,
   shellPathTokenToPath,
@@ -367,6 +368,9 @@ function firstDirectoryHardDeny(
   return undefined;
 }
 
+const SAFETY_CONTROL_REASON =
+  "auto-mode or permission safety-control modification is hard-denied";
+
 function redirectHardDeny(
   target: string,
   cwd: string | undefined,
@@ -381,9 +385,72 @@ function redirectHardDeny(
   const profileReason = isProfileOrAuthorizedKeysPath(path);
   if (profileReason) return profileReason;
   if (isSafetyControlPath(path, policyCwd)) {
-    return "auto-mode or permission safety-control modification is hard-denied";
+    return SAFETY_CONTROL_REASON;
   }
   return undefined;
+}
+
+/** Commands that write, move, or delete their operands, or run code that can. */
+const SAFETY_CONTROL_WRITERS: Record<string, true> = {
+  tee: true,
+  mv: true,
+  cp: true,
+  rm: true,
+  unlink: true,
+  truncate: true,
+  python: true,
+  python3: true,
+  node: true,
+  perl: true,
+  ruby: true,
+  sd: true,
+  sed: true,
+};
+
+/** Config and install-directory names that mark safety controls in command text. */
+const SAFETY_CONTROL_TEXT =
+  /\.(?:pi|omp)\/automode|\.(?:pi|omp)\/extensions|\.omp\/agent\/(?:automode|extensions)|extensions\/pi-automode|auto-mode\.json/i;
+
+/** Whether a command names a safety-control path in its text (code strings included) or operands. */
+function touchesSafetyControl(
+  segment: BashCommandAnalysis,
+  cwd: string | undefined,
+  policyCwd: string,
+): boolean {
+  if (SAFETY_CONTROL_TEXT.test(segment.raw)) return true;
+  const raw = segment.raw.toLowerCase();
+  if (LOADED_EXTENSION_PATHS.some((path) => raw.includes(path.toLowerCase()))) {
+    return true;
+  }
+  const { args, argTexts } = segment.effectiveCommand;
+  return args.some((arg, index) => {
+    const path = shellPathTokenToPath(arg, cwd, argTexts[index] ?? arg);
+    return path !== undefined && isSafetyControlPath(path, policyCwd);
+  });
+}
+
+/** Every file a `write` or `edit` call targets. OMP normalizes hashline edits into `path`/`paths`; `apply_patch` and `MV` are read from the text. */
+function fileToolTargets(
+  toolName: string,
+  input: Record<string, unknown>,
+): string[] {
+  const targets: string[] = [];
+  if (typeof input.path === "string") targets.push(input.path);
+  if (Array.isArray(input.paths)) {
+    for (const path of input.paths) {
+      if (typeof path === "string") targets.push(path);
+    }
+  }
+  if (toolName === "edit" && typeof input.input === "string") {
+    for (
+      const match of input.input.matchAll(
+        /^(?:\*\*\* (?:Add File|Update File|Delete File|Move to): |MV[ \t]+)(.+?)\r?$/gm,
+      )
+    ) {
+      targets.push(match[1]!.replace(/^(["'])(.*)\1$/, "$2"));
+    }
+  }
+  return targets;
 }
 
 function segmentHardDeny(
@@ -526,26 +593,10 @@ function segmentHardDeny(
   }
 
   if (
-    [
-      "tee",
-      "mv",
-      "cp",
-      "rm",
-      "unlink",
-      "truncate",
-      "python",
-      "python3",
-      "node",
-      "perl",
-      "ruby",
-      "sd",
-      "sed",
-    ].includes(name) &&
-    /\.(?:pi|omp)\/automode|\.(?:pi|omp)\/extensions|\.omp\/agent\/(?:automode|extensions)|pi-automode|auto-mode\.json/i.test(
-      segment.raw,
-    )
+    Object.hasOwn(SAFETY_CONTROL_WRITERS, name) &&
+    touchesSafetyControl(segment, cwd, policyCwd)
   ) {
-    return "auto-mode or permission safety-control modification is hard-denied";
+    return SAFETY_CONTROL_REASON;
   }
 
   return undefined;
@@ -564,14 +615,16 @@ export function deterministicHardDeny(
   bashAnalysis?: BashAnalysis,
 ): string | undefined {
   if (toolName === "write" || toolName === "edit") {
-    const path = resolveInputPath(cwd, input.path);
-    if (!path) return undefined;
-    const policyPath = resolvePathForPolicy(path) ?? path;
     const policyCwd = resolvePathForPolicy(cwd) ?? cwd;
-    const profileReason = isProfileOrAuthorizedKeysPath(policyPath);
-    if (profileReason) return profileReason;
-    if (isSafetyControlPath(policyPath, policyCwd)) {
-      return "auto-mode or permission safety-control modification is hard-denied";
+    for (const target of fileToolTargets(toolName, input)) {
+      const path = resolveInputPath(cwd, target);
+      if (!path) continue;
+      const policyPath = resolvePathForPolicy(path) ?? path;
+      const profileReason = isProfileOrAuthorizedKeysPath(policyPath);
+      if (profileReason) return profileReason;
+      if (isSafetyControlPath(policyPath, policyCwd)) {
+        return SAFETY_CONTROL_REASON;
+      }
     }
   }
 

@@ -162,7 +162,7 @@ The extension blocks these before any allow or classifier decision:
 - cron, launch agent, and system service persistence
 - TLS/certificate/auth weakening patterns
 - root, home, and system-path destructive deletes. Subtrees of validated launcher-declared temp directories are treated as disposable. Declared roots that alias `HOME`, `/`, or a system root, or that contain `HOME`, are rejected instead.
-- edits to `.pi/automode*`, `.omp/automode*`, the global automode config directory, and this extension's safety-control files
+- edits to the loaded extension, `.pi/automode*` and `.omp/automode*` config files, the global automode config directory, and Pi permission and settings files. Other checkouts of this extension's source, such as a git clone or worktree, are ordinary project code. See [Active controls](docs/automode-classifier-flow.md#active-controls).
 
 After these checks, pi-automode applies `permissions.allow`. Protected `write` and `edit` targets continue to the classifier.
 

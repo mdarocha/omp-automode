@@ -384,6 +384,20 @@ export type ClassifyHints = {
   skipJudge?: boolean;
 };
 
+/** The auto-mode controls running in this process. Self-protection rules cover exactly these. */
+export type ActiveControls = {
+  /** Real paths of the loaded extension: files and directories (recursive) it runs from. */
+  extensionPaths: string[];
+  /** Global config files in effect. */
+  globalConfigPaths: string[];
+  /** Project config files for the working directory, read only when the project is trusted. */
+  projectConfigPaths: string[];
+  /** Whether `PI_AUTOMODE_SETTINGS_JSON` supplies an inline policy. */
+  envPolicy: boolean;
+  /** The working directory the project config paths belong to. */
+  cwd: string;
+};
+
 export type ClassifyAction = (
   ctx: ExtensionContext,
   config: EffectiveConfig,
@@ -395,4 +409,6 @@ export type ClassifyAction = (
   sessionCreatedPaths?: readonly string[],
   /** Extension-authored analysis of this one action; see {@link ClassifyHints}. */
   hints?: ClassifyHints,
+  /** Active controls for this call. Defaults to the loaded extension, the default global config, and `ctx.cwd`. */
+  controls?: ActiveControls,
 ) => Promise<ClassifyResult>;

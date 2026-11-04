@@ -210,7 +210,7 @@ Current deterministic blocks include these actions:
 
 - writes to shell profile files
 - writes to `~/.ssh/authorized_keys`
-- edits to auto-mode or Pi permission safety-control files
+- edits to the loaded extension (entry file, source directory, vendored parser), to Pi permission and settings files, and to `automode*` config files under `.pi`. Other checkouts of the extension's source are not covered. The checks resolve symlinks first and cover `write`, `edit`, write redirects, and file commands such as `sed`, `cp`, `mv`, `rm`, and `tee`.
 - weaker TLS or certificate verification
 - persistence changes such as cron jobs, launch agents, and system service enablement
 - dangerous recursive deletes of root, home, or system paths
@@ -274,6 +274,7 @@ The system prompt is `CLASSIFIER_SYSTEM_PROMPT` with configuration sections expa
 - allow exceptions
 - soft-deny rules
 - hard-deny rules
+- the active controls
 
 The prompt defines the policy semantics:
 
@@ -305,6 +306,21 @@ A provider that supports strict tool sampling enforces the schema during generat
 An `allow` decision can use `allow`, `explicit_intent`, or `none`. A `block` decision can use `hard_deny`, `soft_deny`, or `none`.
 
 If an exception or user instruction authorizes a soft-denied action, the tier must state why the classifier allows it. It cannot remain `soft_deny`.
+
+### Active controls
+
+HARD_DENY self-protection covers the controls that run in the current process and nothing else. The system prompt lists them in an `Active controls` section that configuration cannot remove:
+
+- the loaded extension: the real path of its entry file (`extensions/auto-mode.ts`), source directory (`extensions/auto-mode/`), and vendored parser (`extensions/vendor/`). A Nix store path or an install directory shows up under its real path.
+- the global config files in effect
+- the project config files for the working directory of the call. They apply only when the project is trusted.
+- whether `PI_AUTOMODE_SETTINGS_JSON` is set. The prompt names the variable and never includes its contents.
+
+The prompt tells the classifier that any other copy of the extension's source (a git clone, a worktree, another checkout) is ordinary project code. Editing it does not change the running controls. It follows the soft-deny rules, the allow exceptions, and the user's intent like any other file. The classifier must not decide that a file is a control from its name, directory name, or contents.
+
+Replacing `hard_deny` drops the default rule that refers to the listed paths. The `Active controls` section and the scoping rule stay, because they are part of the fixed prompt. A custom `hard_deny` rule about "the agent's safety controls" is read against the listed paths.
+
+If the loaded extension directory is itself a git checkout (a development install such as `omp -e <checkout>/extensions/auto-mode.ts`), that checkout is the running copy. Its entry file, `extensions/auto-mode/`, and `extensions/vendor/` stay protected. Its docs, tests, and other files are ordinary project code. To develop the extension, edit a second checkout or worktree that the session did not load.
 
 ### User messages
 

@@ -101,6 +101,7 @@ import {
   releaseParentContextSource,
 } from "./parent-session.ts";
 import {
+  describeActiveControls,
   extractInputPath,
   isInside,
   isProtectedPath,
@@ -1274,6 +1275,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
             // runs arbitrary code a probability cannot vouch for.
             skipJudge: askRequiresClassifier || event.toolName === EVAL_TOOL,
           },
+          describeActiveControls(ctx.cwd, [globalConfig.activePath]),
         );
       } finally {
         classifierCallsInFlight -= 1;

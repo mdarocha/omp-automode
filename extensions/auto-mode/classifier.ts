@@ -31,7 +31,9 @@ import { runJudge } from "./judge.ts";
 import { classifyWithJev } from "./jev.ts";
 import { formatSessionCreatedPaths } from "./provenance.ts";
 import { buildClassifierTranscript } from "./transcript.ts";
+import { describeActiveControls } from "./paths.ts";
 import type {
+  ActiveControls,
   ClassificationDecision,
   ClassifyAction,
   ClassifierIoAttempt,
@@ -44,23 +46,42 @@ import type {
   EffectiveConfig,
 } from "./types.ts";
 
-export function buildClassifierPrompt(config: EffectiveConfig): string {
+/** The Active controls section of the system prompt. */
+export function renderActiveControls(controls: ActiveControls): string {
+  const lines = [
+    `- Loaded extension (the running copy of this classifier's own code; a directory covers everything under it): ${
+      controls.extensionPaths.join(", ")
+    }`,
+    `- Global config files in effect: ${
+      controls.globalConfigPaths.join(", ") || "(none)"
+    }`,
+    `- Project config files for the working directory ${controls.cwd} (read only when the project is trusted): ${
+      controls.projectConfigPaths.join(", ") || "(none)"
+    }`,
+    controls.envPolicy
+      ? "- Environment policy: PI_AUTOMODE_SETTINGS_JSON is set for this process and outranks the config files."
+      : "- Environment policy: PI_AUTOMODE_SETTINGS_JSON is not set.",
+  ];
+  return lines.join("\n");
+}
+
+export function buildClassifierPrompt(
+  config: EffectiveConfig,
+  controls: ActiveControls,
+): string {
+  const bullets = (lines: string[]) => lines.map((line) => `- ${line}`).join("\n");
+  const sections: Record<string, string> = {
+    ENVIRONMENT: bullets(config.environment),
+    ALLOW_RULES: bullets(config.allow),
+    SOFT_DENY_RULES: bullets(config.softDeny),
+    HARD_DENY_RULES: bullets(config.hardDeny),
+    ACTIVE_CONTROLS: renderActiveControls(controls),
+  };
+  // Single pass: inserted text is never rescanned for placeholders.
   return CLASSIFIER_SYSTEM_PROMPT.replace(
-    "<ENVIRONMENT>",
-    config.environment.map((line) => `- ${line}`).join("\n"),
-  )
-    .replace(
-      "<ALLOW_RULES>",
-      config.allow.map((line) => `- ${line}`).join("\n"),
-    )
-    .replace(
-      "<SOFT_DENY_RULES>",
-      config.softDeny.map((line) => `- ${line}`).join("\n"),
-    )
-    .replace(
-      "<HARD_DENY_RULES>",
-      config.hardDeny.map((line) => `- ${line}`).join("\n"),
-    );
+    /<(ENVIRONMENT|ALLOW_RULES|SOFT_DENY_RULES|HARD_DENY_RULES|ACTIVE_CONTROLS)>/g,
+    (_match, name: string) => sections[name]!,
+  );
 }
 
 export function classifierReasoningForConfig(
@@ -923,8 +944,9 @@ export const defaultClassifyAction: ClassifyAction = async (
   notes = [],
   sessionCreatedPaths = [],
   hints,
+  controls = describeActiveControls(ctx.cwd),
 ): Promise<ClassifyResult> => {
-  const systemPrompt = buildClassifierPrompt(config);
+  const systemPrompt = buildClassifierPrompt(config, controls);
   const transcript = buildClassifierTranscript(ctx, {
     maxUserTokens: config.maxUserTranscriptTokens,
     maxToolTokens: config.maxToolTranscriptTokens,

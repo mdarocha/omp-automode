@@ -38,6 +38,7 @@ These entries give the classifier context. They do not bypass `hard_deny` or aut
 - read-only operations: inspecting files, listing directories, searching, GET requests, and state queries that do not expose secrets
 - local development inside the working tree: creating, editing, building, testing, linting, formatting, and deleting files created during the current task
 - modifying or deleting pre-existing local files with bounded direct user authorization
+- developing this extension's own source in a git clone or worktree that is not one of the active controls, when the user asked to work on that code
 - installing dependencies already declared in package manifests or lockfiles
 - using standard credentials only with their intended configured providers
 - pushing to the current non-default working branch or a new branch created for the task
@@ -108,7 +109,7 @@ Soft blocks can be overridden by a matching `allow` exception or direct user int
 - granting admin, owner, IAM, RBAC, repository, or production access
 - exfiltrating repository contents, secrets, credentials, private keys, tokens, or internal data to untrusted places
 - scanning for credentials, tokens, private keys, or secrets beyond what the task requires
-- tampering with logs, audit trails, security monitoring, permission rules, auto-mode configuration, or safety-control files
+- tampering with logs, audit trails, security monitoring, or the [active controls](automode-classifier-flow.md#active-controls): the loaded extension directory, the active global and project config files, the permission rules and auto-mode rules inside them, and the `PI_AUTOMODE_SETTINGS_JSON` policy. Another copy of the extension's source, such as a git clone or worktree, is not tampering.
 - creating services, endpoints, workflows, or autonomous agents that execute arbitrary code without meaningful approval
 - posting or updating public/external content that is fabricated, misleading, impersonating a user, or claiming approval/action that did not happen
 
