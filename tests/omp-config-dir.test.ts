@@ -1,5 +1,8 @@
 import { spawnSync } from "node:child_process";
 import {
+	linkSync,
+	readdirSync,
+	statSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -20,6 +23,7 @@ import {
 	deterministicHardDeny,
 	loadEffectiveConfigWithDiagnostics,
 	ompConfigLocations,
+	prepareGlobalConfig,
 	registerOmpAgentDir,
 	resolveConfigLocations,
 	resolveLogPath,
@@ -626,4 +630,116 @@ test("tool_call hook blocks writes to .omp/automode.local.json before the classi
 	assert.equal(result.block, true);
 	assert.match(result.reason ?? "", /safety-control/);
 	assert.equal(harness.classifierCalls, 0);
+});
+
+function crossDeviceLink(legacyPath: string) {
+	return (source: string, destination: string) => {
+		if (source === legacyPath) {
+			throw Object.assign(new Error("EXDEV: cross-device link not permitted"), { code: "EXDEV" });
+		}
+		linkSync(source, destination);
+	};
+}
+
+test("migration copies across filesystems when a hard link fails with EXDEV", () => {
+	withTempDir("omp-automode-exdev-", (dir) => {
+		const legacyPath = join(dir, "pi/config.json");
+		const currentPath = join(dir, "omp/automode/config.json");
+		writeJson(legacyPath, { autoMode: { classifierModel: "test/exdev" } });
+		const legacyMode = statSync(legacyPath).mode;
+
+		const result = prepareGlobalConfig({
+			currentPath,
+			legacyPath,
+			linkFile: crossDeviceLink(legacyPath),
+		});
+
+		assert.equal(result.status, "migrated");
+		assert.equal(result.activePath, currentPath);
+		assert.match(result.notification ?? "", /moved/i);
+		assert.equal(existsSync(legacyPath), false);
+		assert.equal(
+			JSON.parse(readFileSync(currentPath, "utf8")).autoMode.classifierModel,
+			"test/exdev",
+		);
+		assert.equal(statSync(currentPath).mode, legacyMode);
+		assert.deepEqual(readdirSync(dirname(currentPath)), ["config.json"]);
+	});
+});
+
+test("a link failure other than EXDEV keeps the legacy config active", () => {
+	withTempDir("omp-automode-link-denied-", (dir) => {
+		const legacyPath = join(dir, "pi/config.json");
+		const currentPath = join(dir, "omp/automode/config.json");
+		writeJson(legacyPath, { autoMode: {} });
+
+		const result = prepareGlobalConfig({
+			currentPath,
+			legacyPath,
+			linkFile() {
+				throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+			},
+		});
+
+		assert.equal(result.status, "failed");
+		assert.equal(result.activePath, legacyPath);
+		assert.equal(existsSync(legacyPath), true);
+		assert.equal(existsSync(currentPath), false);
+		assert.deepEqual(readdirSync(dirname(currentPath)), []);
+	});
+});
+
+test("a cross-filesystem migration removes its copy when the legacy file cannot be removed", () => {
+	withTempDir("omp-automode-exdev-unlink-", (dir) => {
+		const legacyPath = join(dir, "pi/config.json");
+		const currentPath = join(dir, "omp/automode/config.json");
+		writeJson(legacyPath, { autoMode: { classifierModel: "test/exdev" } });
+
+		const result = prepareGlobalConfig({
+			currentPath,
+			legacyPath,
+			linkFile: crossDeviceLink(legacyPath),
+			unlinkFile(path) {
+				if (path === legacyPath) {
+					throw new Error("unlink denied");
+				}
+				rmSync(path);
+			},
+		});
+
+		assert.equal(result.status, "failed");
+		assert.equal(result.activePath, legacyPath);
+		assert.match(result.diagnostic ?? "", /unlink denied/);
+		assert.equal(existsSync(legacyPath), true);
+		assert.deepEqual(readdirSync(dirname(currentPath)), []);
+	});
+});
+
+test("a cross-filesystem migration never overwrites a config created meanwhile", () => {
+	withTempDir("omp-automode-exdev-race-", (dir) => {
+		const legacyPath = join(dir, "pi/config.json");
+		const currentPath = join(dir, "omp/automode/config.json");
+		writeJson(legacyPath, { autoMode: { classifierModel: "test/legacy" } });
+
+		const result = prepareGlobalConfig({
+			currentPath,
+			legacyPath,
+			linkFile(source, destination) {
+				if (source === legacyPath) {
+					throw Object.assign(new Error("EXDEV"), { code: "EXDEV" });
+				}
+				writeJson(destination, { autoMode: { classifierModel: "test/winner" } });
+				linkSync(source, destination);
+			},
+		});
+
+		assert.equal(result.status, "conflict");
+		assert.equal(result.activePath, currentPath);
+		assert.equal(
+			JSON.parse(readFileSync(currentPath, "utf8")).autoMode.classifierModel,
+			"test/winner",
+		);
+		assert.equal(existsSync(legacyPath), true);
+		assert.deepEqual(readdirSync(dirname(currentPath)), ["config.json"]);
+	});
 });
