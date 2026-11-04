@@ -1,16 +1,23 @@
 // Loaded only through `loadOmpBridge()` in `omp.ts`. The static imports below
 // exist in OMP and not in Pi, so a failed import means "not running in OMP".
 import { resolveRoleChain } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import { roleCandidatePool } from "@oh-my-pi/pi-coding-agent/config/model-roles";
+import {
+  getKnownRoleIds,
+  getRoleInfo,
+  roleCandidatePool,
+} from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
   journalJudgmentUsage,
   kindOf,
   resolveJudge,
 } from "@oh-my-pi/pi-coding-agent/judgment";
-import { type JudgeProbabilities, withCalibratedJudge } from "./strategy.ts";
+import { createModelBrowserSource } from "@oh-my-pi/pi-coding-agent/modes/model-browser-source";
+import { ModelPickerComponent } from "@oh-my-pi/pi-tui/overlays/model-picker";
+import { JUDGE_ROLE, type JudgeProbabilities, withCalibratedJudge } from "./strategy.ts";
 import type { JudgeQuestionId, OmpBridge } from "./omp.ts";
 
+const CHAT_ROLE_SECTION = "chat";
 const CHAT_COMPLETION_KIND = "online";
 const JUDGE_PURPOSE = "automode";
 const QUESTION_CRITERIA = {
@@ -19,6 +26,27 @@ const QUESTION_CRITERIA = {
 };
 
 export const ompBridge: OmpBridge = {
+  roleNames() {
+    return getKnownRoleIds(settings).filter((role) =>
+      role === JUDGE_ROLE || getRoleInfo(role, settings).section === CHAT_ROLE_SECTION
+    );
+  },
+
+  pickModel(ctx, currentSelector) {
+    return ctx.ui.custom<string | undefined>(
+      (tui, _theme, _keybindings, done) =>
+        new ModelPickerComponent(
+          tui,
+          createModelBrowserSource(settings),
+          ctx.modelRegistry,
+          [],
+          { onPick: (_model, selector) => done(selector), onCancel: () => done(undefined) },
+          { currentSelector, selectOnly: true },
+        ),
+      { overlay: true },
+    );
+  },
+
   roleChain(role, registry) {
     const pool = roleCandidatePool(role, settings, registry);
     // Judge-role chains also hold native judgment and on-device models. They

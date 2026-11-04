@@ -19,6 +19,32 @@ declare module "@oh-my-pi/pi-coding-agent/config/model-roles" {
     settings: unknown,
     registry: unknown,
   ): Array<import("@earendil-works/pi-ai").Model<any>>;
+  export function getKnownRoleIds(settings: unknown): string[];
+  /** `kind` roles hold non-chat models (image, speech) and the `judge` role. */
+  export function getRoleInfo(role: string, settings: unknown): { section: "chat" | "kind" };
+}
+
+declare module "@oh-my-pi/pi-coding-agent/modes/model-browser-source" {
+  export function createModelBrowserSource(settings: unknown): unknown;
+}
+
+declare module "@oh-my-pi/pi-tui/overlays/model-picker" {
+  export class ModelPickerComponent {
+    constructor(
+      tui: unknown,
+      source: unknown,
+      registry: unknown,
+      scopedModels: readonly unknown[],
+      callbacks: {
+        onPick(model: unknown, selector: string, meta: { overContext: boolean }): void;
+        onCancel(): void;
+      },
+      options?: { currentSelector?: string; selectOnly?: boolean },
+    );
+    render(width: number): string[];
+    invalidate(): void;
+    handleInput(data: string): void;
+  }
 }
 
 declare module "@oh-my-pi/pi-coding-agent/config/settings" {

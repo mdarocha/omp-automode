@@ -13,10 +13,7 @@ import {
   defaultClassifyAction,
   serializeClassifierAction,
 } from "./classifier.ts";
-import {
-  describeClassifierModel,
-  resolveClassifierModels,
-} from "./classifier-models.ts";
+import { describeClassifierModel } from "./classifier-models.ts";
 import { classifierCooldowns } from "./classifier-fallback.ts";
 import { analyzeBash, type BashAnalysis } from "./bash.ts";
 import {
@@ -34,7 +31,7 @@ import {
   type GlobalConfigPreparation,
   loadEffectiveConfigWithDiagnostics,
   prepareGlobalConfig,
-  writeGlobalClassifierModel,
+  writeGlobalSetting,
 } from "./config.ts";
 import { deterministicHardDeny } from "./hard-deny.ts";
 import {
@@ -43,14 +40,19 @@ import {
   resolveLogPath,
   type Logger,
 } from "./log.ts";
-import {
-  formatModelSpec,
-  jevModelId,
-  parseClassifierSelector,
-  parseModelSpec,
-} from "./model.ts";
 import { loadOmpBridge } from "./omp.ts";
-import { promptForClassifierModel } from "./model-selector.ts";
+import {
+  chooseClassifierModel,
+  validateClassifierSelection,
+} from "./model-choice.ts";
+import {
+  describeSavedSetting,
+  describeSettingsWithoutUi,
+  runSettingsMenu,
+  SETTING_LABELS,
+  type SettingsMenuHost,
+  type SettingsSnapshot,
+} from "./settings-menu.ts";
 import {
   matchesAllowedToolPatterns,
   matchesDeniedPath,
@@ -93,6 +95,7 @@ import type {
   DecisionKind,
   DenialRecord,
   EffectiveConfig,
+  SettingUpdate,
 } from "./types.ts";
 import { safeJson, truncateMiddle } from "./utils.ts";
 
@@ -144,8 +147,10 @@ export type PiAutomodeOptions = {
   loadConfig?: (cwd: string, projectTrusted: boolean) => EffectiveConfig;
   /** Override classifier calls in tests so unit tests never need a real LLM/API key. */
   classifyAction?: ClassifyAction;
-  /** Override classifier-model persistence in tests. Runtime code writes the active global config. */
+  /** Override classifier-model persistence in tests. Takes precedence over `saveSetting` for that key. */
   saveClassifierModel?: (classifierModel: string) => void;
+  /** Override global setting persistence in tests. Runtime code writes the active global config. */
+  saveSetting?: (update: SettingUpdate) => void;
   /** Override global config migration and path selection in tests. */
   prepareGlobalConfig?: () => GlobalConfigPreparation;
   /** Override the application-owned observability log root in tests. */
@@ -232,14 +237,19 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         }
         : result;
     };
-    const persistClassifierModel = options.saveClassifierModel ??
-      ((classifierModel: string) =>
-        writeGlobalClassifierModel(classifierModel, globalConfig.activePath));
-    const saveClassifierModel = globalConfig.writeBlockedReason
-      ? (_classifierModel: string) => {
+    const persistSetting = options.saveSetting ??
+      ((update: SettingUpdate) =>
+        writeGlobalSetting(update, globalConfig.activePath));
+    const saveSetting = (update: SettingUpdate): void => {
+      if (globalConfig.writeBlockedReason) {
         throw new Error(globalConfig.writeBlockedReason);
       }
-      : persistClassifierModel;
+      if (update.key === "classifierModel" && options.saveClassifierModel) {
+        options.saveClassifierModel(update.value);
+        return;
+      }
+      persistSetting(update);
+    };
     let loadResult = loadConfigWithDiagnostics(process.cwd(), false);
     let config: EffectiveConfig = loadResult.config;
     let configDiagnostics: string[] = loadResult.diagnostics;
@@ -856,6 +866,57 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       },
     });
 
+    function refreshConfig(ctx: ExtensionContext): void {
+      loadResult = loadConfigWithDiagnostics(ctx.cwd, projectIsTrusted(ctx));
+      config = loadResult.config;
+      configDiagnostics = loadResult.diagnostics;
+      persist();
+      updateUi(ctx);
+    }
+
+    function settingsSnapshot(): SettingsSnapshot {
+      return {
+        config: effectiveConfig(),
+        provenance: loadResult.provenance,
+        sessionEnabled: enabledOverride.value,
+      };
+    }
+
+    async function saveGlobalSetting(
+      update: SettingUpdate,
+      ctx: ExtensionCommandContext,
+    ): Promise<void> {
+      try {
+        saveSetting(update);
+      } catch (error) {
+        ctx.ui.notify(
+          `Failed to save ${SETTING_LABELS[update.key]}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          "error",
+        );
+        return;
+      }
+      refreshConfig(ctx);
+      const saved = describeSavedSetting(update, settingsSnapshot());
+      ctx.ui.notify(saved.message, saved.overridden ? "warning" : "info");
+    }
+
+    async function setClassifierModel(
+      selected: string,
+      ctx: ExtensionCommandContext,
+    ): Promise<void> {
+      const selection = await validateClassifierSelection(ctx, selected);
+      if ("error" in selection) {
+        ctx.ui.notify(selection.error, "error");
+        return;
+      }
+      await saveGlobalSetting(
+        { key: "classifierModel", value: selection.spec },
+        ctx,
+      );
+    }
+
     async function handleAutomodeCommand(
       args: string,
       ctx: ExtensionCommandContext,
@@ -890,14 +951,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       if (command === "reload") {
         // Also forgets rate-limit cooldowns, so the next action probes providers again.
         classifierCooldowns.clear();
-        loadResult = loadConfigWithDiagnostics(
-          ctx.cwd,
-          projectIsTrusted(ctx),
-        );
-        config = loadResult.config;
-        configDiagnostics = loadResult.diagnostics;
-        persist();
-        updateUi(ctx);
+        refreshConfig(ctx);
         ctx.ui.notify(
           "pi-automode config reloaded",
           configDiagnostics.length > 0 ? "warning" : "info",
@@ -958,90 +1012,50 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
         return;
       }
       if (command === "model") {
-        const selected = remainder || await promptForClassifierModel(
-          ctx,
-          effectiveConfig().classifierModel,
-        );
+        const selected = remainder ||
+          await chooseClassifierModel(ctx, effectiveConfig().classifierModel);
         if (!selected) {
           ctx.ui.notify("Classifier model unchanged", "info");
           return;
         }
-        let modelSpec: string;
-        if (jevModelId(selected)) {
-          if (!process.env.TYPESAFE_API_KEY?.trim()) {
-            ctx.ui.notify("Set TYPESAFE_API_KEY before selecting Jev.", "error");
-            return;
-          }
-          modelSpec = selected;
-        } else if (parseClassifierSelector(selected)?.kind === "role") {
-          const resolved = resolveClassifierModels(
-            ctx,
-            { classifierModel: selected },
-            await loadOmpBridge(),
-          );
-          if (resolved.models.length === 0) {
-            ctx.ui.notify(
-              resolved.problem ?? `${selected} resolves to no available model`,
-              "error",
+        await setClassifierModel(selected, ctx);
+        return;
+      }
+      if (command === "settings") {
+        const host: SettingsMenuHost = {
+          ctx,
+          globalConfigPath: globalConfig.activePath,
+          snapshot: settingsSnapshot,
+          classifierLabel: () => classifierLabel(ctx),
+          hasJudge: (await loadOmpBridge()) !== undefined,
+          save: (update) => saveGlobalSetting(update, ctx),
+          chooseModel: async () => {
+            const selected = await chooseClassifierModel(
+              ctx,
+              effectiveConfig().classifierModel,
             );
-            return;
-          }
-          modelSpec = selected;
-        } else {
-          const parsed = parseModelSpec(selected);
-          const model = parsed
-            ? ctx.modelRegistry.find(parsed.provider, parsed.id)
-            : undefined;
-          if (!model) {
-            ctx.ui.notify(`Model not found: ${selected}`, "error");
-            return;
-          }
-          const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-          if (!auth.ok) {
-            ctx.ui.notify(auth.error, "error");
-            return;
-          }
-          modelSpec = formatModelSpec(model);
-        }
-        try {
-          saveClassifierModel(modelSpec);
-        } catch (error) {
-          ctx.ui.notify(
-            `Failed to save classifier model: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-            "error",
-          );
+            if (selected) {
+              await setClassifierModel(selected, ctx);
+            }
+          },
+        };
+        if (!ctx.hasUI) {
+          ctx.ui.notify(await describeSettingsWithoutUi(host), "info");
           return;
         }
-        loadResult = loadConfigWithDiagnostics(
-          ctx.cwd,
-          projectIsTrusted(ctx),
-        );
-        config = loadResult.config;
-        configDiagnostics = loadResult.diagnostics;
-        persist();
-        updateUi(ctx);
-        const active = effectiveConfig().classifierModel ??
-          "current session model";
-        ctx.ui.notify(
-          active === modelSpec
-            ? `pi-automode classifier saved globally: ${modelSpec}`
-            : `pi-automode classifier saved globally: ${modelSpec}; current config uses ${active}`,
-          "info",
-        );
+        await runSettingsMenu(host);
         return;
       }
 
       ctx.ui.notify(
-        "Usage: /automode [status|on|off|reload|reset|defaults|config|denials|model [provider/id|@role]]",
+        "Usage: /automode [status|on|off|reload|reset|defaults|config|denials|settings|model [provider/id|@role]]",
         "error",
       );
     }
 
     pi.registerCommand("automode", {
       description:
-        "Control pi-automode: status, on, off, reload, reset, defaults, config, denials, model",
+        "Control pi-automode: status, on, off, reload, reset, defaults, config, denials, settings, model",
       handler: handleAutomodeCommand,
     });
 

@@ -8,6 +8,16 @@ import {
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { formatModelSpec, jevModelId } from "./model.ts";
 
+const JEV_LATEST_SELECTOR = "typesafe/jev-latest";
+
+/** Jev selectors to offer: the latest alias and the configured pinned version. Empty without a TypeSafe key. */
+export function jevSelectorChoices(current?: string): string[] {
+  if (!process.env.TYPESAFE_API_KEY?.trim()) return [];
+  return current && jevModelId(current) && current !== JEV_LATEST_SELECTOR
+    ? [JEV_LATEST_SELECTOR, current]
+    : [JEV_LATEST_SELECTOR];
+}
+
 /** Interactive model selector shown when `/automode model` is run without arguments. */
 export function promptForClassifierModel(
   ctx: ExtensionContext,
@@ -26,17 +36,13 @@ export function promptForClassifierModel(
       description: spec === current ? "\u2713" : undefined,
     };
   });
-  if (process.env.TYPESAFE_API_KEY?.trim()) {
-    const specs = ["typesafe/jev-latest"];
-    if (current && jevModelId(current) && current !== specs[0]) specs.push(current);
-    for (const spec of specs) {
-      if (items.some((item) => item.value === spec)) continue;
-      items.push({
-        value: spec,
-        label: `${jevModelId(spec)} \u001b[2m[typesafe]\u001b[0m`,
-        description: spec === current ? "\u2713" : undefined,
-      });
-    }
+  for (const spec of jevSelectorChoices(current)) {
+    if (items.some((item) => item.value === spec)) continue;
+    items.push({
+      value: spec,
+      label: `${jevModelId(spec)} \u001b[2m[typesafe]\u001b[0m`,
+      description: spec === current ? "\u2713" : undefined,
+    });
   }
   if (items.length === 0) return Promise.resolve(undefined);
   items.sort((a, b) => a.label.localeCompare(b.label));

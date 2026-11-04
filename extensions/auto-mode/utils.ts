@@ -10,6 +10,10 @@ export function hasOwn(object: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(object, key);
 }
 
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function truncateMiddle(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   const head = Math.floor(maxLength * 0.65);

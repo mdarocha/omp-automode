@@ -37,6 +37,16 @@ export type OmpBridge = {
    * candidates are skipped. Rejects when no calibrated candidate can answer.
    */
   judge(request: JudgeRequest): Promise<JudgeOutcome>;
+  /** Model roles that can serve as the classifier: chat roles plus `judge`, built-in and custom. */
+  roleNames(): string[];
+  /**
+   * Open OMP's model picker in select-only mode, which changes no session or
+   * role. Resolves to the chosen `provider/id`, or undefined when dismissed.
+   */
+  pickModel(
+    ctx: ExtensionContext,
+    currentSelector?: string,
+  ): Promise<string | undefined>;
 };
 
 let bridge: OmpBridge | undefined;

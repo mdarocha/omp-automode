@@ -48,11 +48,15 @@ import type {
   EffectiveConfig,
   LoadedSettingsFile,
   LogConfig,
+  SettingId,
+  SettingSource,
   SettingsFile,
+  SettingsProvenance,
   SettingsSources,
+  SettingUpdate,
   ToolPattern,
 } from "./types.ts";
-import { hasOwn, stringArray } from "./utils.ts";
+import { hasOwn, isPlainObject, stringArray } from "./utils.ts";
 
 export type GlobalConfigPreparation = {
   status: "current" | "migrated" | "conflict" | "failed";
@@ -601,19 +605,19 @@ function validateDeniedPathsSetting(
 const DENIED_PATH_PATTERN_PREFIX =
   /^(?:\/|~(?:\/|$)|\$HOME(?:\/|$)|\$\{HOME\}(?:\/|$)|\*)/;
 
-const CLASSIFIER_REASONING_LEVELS = new Set<ClassifierReasoningLevel>([
+export const CLASSIFIER_REASONING_LEVELS: readonly ClassifierReasoningLevel[] = [
   "low",
   "medium",
   "high",
   "xhigh",
   "max",
-]);
+];
 
 export function isClassifierReasoningLevel(
   value: unknown,
 ): value is ClassifierReasoningLevel {
   return typeof value === "string" &&
-    CLASSIFIER_REASONING_LEVELS.has(value as ClassifierReasoningLevel);
+    (CLASSIFIER_REASONING_LEVELS as readonly string[]).includes(value);
 }
 
 function isValidClassifierModel(value: unknown): value is string {
@@ -684,6 +688,66 @@ function applyAutoModeScalars(
       : base.maxToolTranscriptTokens,
     log: mergeLog(base.log, settings.log),
   };
+}
+
+const LOG_SETTING_PREFIX = "log.";
+
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
+/** The same value checks `applyAutoModeScalars` applies, keyed by setting. */
+const SETTING_VALIDATORS: Record<SettingId, (value: unknown) => boolean> = {
+  enabled: isBoolean,
+  classifierStrategy: isClassifierStrategy,
+  classifierModel: isValidClassifierModel,
+  judgeConfidence: isJudgeConfidence,
+  classifierReasoningLevel: isClassifierReasoningLevel,
+  "log.enabled": isBoolean,
+  "log.classifierIo": isBoolean,
+};
+
+// Object.keys is string[]; the table above is keyed by exactly SettingId.
+const SETTING_IDS = Object.keys(SETTING_VALIDATORS) as SettingId[];
+
+const DEFAULT_SETTING_SOURCE: SettingSource = { kind: "default" };
+const INLINE_SETTING_SOURCE: SettingSource = { kind: "inline" };
+
+/** One settings file or the inline JSON, with where it came from. */
+type SettingsLayer = { source: SettingSource; settings: SettingsFile };
+
+function readSetting(autoMode: unknown, id: SettingId): unknown {
+  if (!isPlainObject(autoMode)) return undefined;
+  if (!id.startsWith(LOG_SETTING_PREFIX)) return autoMode[id];
+  const log = autoMode.log;
+  return isPlainObject(log) ? log[id.slice(LOG_SETTING_PREFIX.length)] : undefined;
+}
+
+/**
+ * The source that supplies each editable setting: the last layer with a valid
+ * value, matching how the merge lets later layers win and ignore invalid values.
+ */
+function settingsProvenance(
+  layers: readonly SettingsLayer[],
+): SettingsProvenance {
+  // fromEntries loses the key type; every SettingId gets an entry.
+  return Object.fromEntries(
+    SETTING_IDS.map((id) => [
+      id,
+      layers.findLast((layer) =>
+        SETTING_VALIDATORS[id](readSetting(layer.settings.autoMode, id))
+      )?.source ?? DEFAULT_SETTING_SOURCE,
+    ]),
+  ) as SettingsProvenance;
+}
+
+function fileLayers(
+  files: Array<LoadedSettingsFile | undefined>,
+  kind: "global" | "project-local",
+): SettingsLayer[] {
+  return files.flatMap((file) =>
+    file?.settings ? [{ source: { kind, path: file.path }, settings: file.settings }] : []
+  );
 }
 
 function appendPermissionPatterns(
@@ -899,6 +963,14 @@ export function loadEffectiveConfigWithDiagnostics(
       ...sharedAllowDiagnostics,
       ...diagnostics,
     ],
+    provenance: settingsProvenance([
+      ...fileLayers(globalFiles, "global"),
+      ...fileLayers(projectLocalFiles, "project-local"),
+      ...inlineSettings.map((settings) => ({
+        source: INLINE_SETTING_SOURCE,
+        settings,
+      })),
+    ]),
   };
 }
 
@@ -933,19 +1005,50 @@ function readWritableSettingsFile(path: string): SettingsFile {
   return settings;
 }
 
+/**
+ * Persist one editable setting in the global config while preserving every
+ * other key. Rejects values the loader would ignore, so a saved setting always
+ * takes effect.
+ */
+export function writeGlobalSetting(
+  update: SettingUpdate,
+  path = PI_GLOBAL_SETTINGS[0],
+): void {
+  const { key, value } = update;
+  const removesKey = key === "classifierReasoningLevel" && value === undefined;
+  if (
+    !hasOwn(SETTING_VALIDATORS, key) ||
+    (!removesKey && !SETTING_VALIDATORS[key](value))
+  ) {
+    throw new Error(
+      `Invalid value for autoMode.${key}: ${JSON.stringify(value) ?? "undefined"}`,
+    );
+  }
+  const settings = readWritableSettingsFile(path);
+  const autoMode: Record<string, unknown> = { ...settings.autoMode };
+  if (key.startsWith(LOG_SETTING_PREFIX)) {
+    const log = autoMode.log;
+    if (log !== undefined && !isPlainObject(log)) {
+      throw new Error(`${path}: autoMode.log must be a JSON object`);
+    }
+    autoMode.log = { ...log, [key.slice(LOG_SETTING_PREFIX.length)]: value };
+  } else if (removesKey) {
+    delete autoMode[key];
+  } else {
+    autoMode[key] = value;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(
+    path,
+    `${JSON.stringify({ ...settings, autoMode }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 /** Persist the global default classifier model while preserving other settings. */
 export function writeGlobalClassifierModel(
   classifierModel: string,
   path = PI_GLOBAL_SETTINGS[0],
 ): void {
-  const settings = readWritableSettingsFile(path);
-  const next: SettingsFile = {
-    ...settings,
-    autoMode: {
-      ...settings.autoMode,
-      classifierModel,
-    },
-  };
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  writeGlobalSetting({ key: "classifierModel", value: classifierModel }, path);
 }

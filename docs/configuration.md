@@ -143,6 +143,20 @@ Example:
 
 Pi-automode does not support the former `maxTranscriptLines` field. Evidence selection now uses token budgets instead of line counts.
 
+## Settings menu
+
+`/automode settings` opens an interactive menu for `enabled`, `classifierStrategy`, `classifierModel`, `judgeConfidence`, `classifierReasoningLevel`, `log.enabled`, and `log.classifierIo`. Each row shows the effective value and the source that supplies it: the built-in default, the global file, the project-local file, `PI_AUTOMODE_SETTINGS_JSON`, or, for `enabled`, the `/automode on` or `/automode off` choice of the current session. The menu repeats until you pick Done or press Escape.
+
+A choice is written to `~/.pi/agent/extensions/pi-automode/config.json` and takes effect at once. The write keeps every other key in the file. `/automode model` writes to the same file. While a failed migration blocks global config writes, the menu refuses each change and prints the reason. The `enabled` row writes `autoMode.enabled`; it leaves the session's `/automode on|off` choice alone. Typed values are checked before they are saved: `judgeConfidence` must be above 0.5 and at most 1, and the reasoning level is one of `low`, `medium`, `high`, `xhigh`, `max`, or unset.
+
+Sources with higher precedence still win over the global file. When a saved value is overridden, the confirmation names the winner, for example `classifier strategy saved globally: detailed, but the current config uses hybrid from PI_AUTOMODE_SETTINGS_JSON`. The winner can be `PI_AUTOMODE_SETTINGS_JSON`, a project-local file, or the session's `/automode on|off` choice.
+
+Under OMP, the classifier model row lists the model roles (`@smol`, `@judge`, and any others that resolve to a chat model) with the model each resolves to, plus `typesafe/jev-latest` when `TYPESAFE_API_KEY` is set. The `Browse all models…` entry opens OMP's native model picker in selection-only mode, which changes no session or role. That picker lists models and no roles, which is why the roles sit in the list in front of it. Under Pi the row opens Pi's model list, and if OMP's picker fails to open the plain list takes its place. A chosen value passes the same checks as `/automode model <selector>`: a role must resolve to a model, Jev needs `TYPESAFE_API_KEY`, and a model must exist and have credentials.
+
+pi-automode has no judge model setting. The `hybrid` strategy uses OMP's `judge` model role, so the menu shows a "Judge model" row under OMP that points to the OMP configuration (`modelRoles.judge`) and changes nothing.
+
+Without a UI, such as print mode, `/automode settings` prints the current settings, their sources, and the global config path instead of prompting.
+
 ## Ask-user tools and explicit authorization
 
 Classifier evidence includes normal user messages, verified answers from OMP's built-in `ask` tool, and assistant tool-call inputs. It excludes assistant prose and all other tool results, including answers from same-named or extension-provided ask tools such as `@vanillagreen/pi-questions`.

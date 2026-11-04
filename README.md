@@ -60,9 +60,11 @@ For Jev, set `TYPESAFE_API_KEY` in the environment before starting OMP or Pi, th
 /automode model typesafe/jev-latest
 ```
 
-Use a pinned version such as `typesafe/jev-1.14.0` if needed. Jev appears in the interactive `/automode model` picker when the key is present. It uses TypeSafe's native [System One API](https://docs.typesafe.ai/api), not a chat-completions endpoint, and needs no Pi provider registration.
+Use a pinned version such as `typesafe/jev-1.14.0` if needed. Jev appears in the interactive `/automode model` prompt when the key is present. It uses TypeSafe's native [System One API](https://docs.typesafe.ai/api), not a chat-completions endpoint, and needs no Pi provider registration.
 
-To switch back, run `/automode model provider/model-id` with any configured Pi/OMP model. Under OMP you can also pass a model role such as `/automode model @smol` or `/automode model @judge`; the classifier then uses that role's model and its fallbacks. If `classifierModel` is omitted from configuration, OMP uses `@smol` and Pi uses the current session model. Jev is never selected merely because its key exists.
+To switch back, run `/automode model provider/model-id` with any configured Pi/OMP model. Under OMP you can also pass a model role such as `/automode model @smol` or `/automode model @judge`; the classifier then uses that role's model and its fallbacks. Without an argument, `/automode model` under OMP lists the model roles and opens OMP's native model picker from its `Browse all models…` entry; under Pi it shows Pi's model list. If `classifierModel` is omitted from configuration, OMP uses `@smol` and Pi uses the current session model. Jev is never selected merely because its key exists.
+
+`/automode settings` opens a menu for the main classifier and logging settings and shows where each value comes from. See [Settings menu](docs/configuration.md#settings-menu).
 
 Jev evaluates typed policy questions in one request; code combines the answers with hard-deny precedence. Missing keys, invalid responses, cancellation, and request timeouts block the action. Existing permission and deterministic checks are unchanged. See [Jev configuration](docs/configuration.md#typesafe-jev).
 
@@ -77,7 +79,8 @@ Jev evaluates typed policy questions in one request; code combines the answers w
 /automode defaults  # print the built-in rule lists
 /automode config    # effective config, resolved log file path, + diagnostics
 /automode denials   # denial history for this session
-/automode model     # open classifier model selector and save to ~/.pi/agent/extensions/pi-automode/config.json
+/automode settings  # interactive menu for the common settings; saves to ~/.pi/agent/extensions/pi-automode/config.json
+/automode model     # choose a classifier model (OMP: roles, then the native model picker; Pi: model list) and save it to ~/.pi/agent/extensions/pi-automode/config.json
 /automode model provider/model-id # save classifier model to ~/.pi/agent/extensions/pi-automode/config.json
 /automode model @smol # OMP only: use an OMP model role (and its fallbacks) as the classifier
 ```
