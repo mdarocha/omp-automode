@@ -95,6 +95,10 @@ import {
 import { analyzeReadOnlyBash, readOnlyBashPolicy } from "./read-only-bash.ts";
 import { isInsideReadOnlyRoot, isPlainFilePath } from "./read-only-roots.ts";
 import {
+  registerParentContextSource,
+  releaseParentContextSource,
+} from "./parent-session.ts";
+import {
   extractInputPath,
   isInside,
   isProtectedPath,
@@ -402,6 +406,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       // Register on both start paths: a `/tan` clone's subagents also look
       // their ancestors up in this registry.
       sessionRecord = registerSession(ctx);
+      registerParentContextSource(ctx);
       // The Agent Hub entry is made here too, so a `/tan` clone shows up as
       // `Tan-<id>-automode` although it never gets `session_start`.
       hubEntry?.dispose();
@@ -677,6 +682,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       for (const pending of pendingAsks) {
         pending.abort();
       }
+      releaseParentContextSource(ctx);
     });
 
     pi.on("before_agent_start", (event, ctx) => {
@@ -1293,6 +1299,8 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     }
 
     pi.on("tool_call", async (event, ctx) => {
+      // Refresh this session's entry for its subagents' parent-context lookups.
+      registerParentContextSource(ctx);
       narrowedSearchInputs.delete(event.toolCallId);
       const result = await evaluateToolCall(event, ctx);
       if (result !== undefined) return result;

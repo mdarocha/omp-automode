@@ -154,6 +154,8 @@ export function createFakeCtx(entries: any[] = [], overrides: Record<string, unk
 	};
 }
 
+export type FakeCtx = ReturnType<typeof createFakeCtx>;
+
 export function baseConfig(overrides: Partial<EffectiveConfig> = {}): EffectiveConfig {
 	return {
 		enabled: true,
@@ -172,6 +174,9 @@ export function baseConfig(overrides: Partial<EffectiveConfig> = {}): EffectiveC
 		includeToolResults: true,
 		maxToolResultTranscriptTokens: 2000,
 		maxToolResultTranscriptEntries: 10,
+		includeParentUserMessages: true,
+		maxParentUserTranscriptTokens: 2000,
+		maxParentUserTranscriptMessages: 6,
 		environment: [],
 		allow: [],
 		protectedPaths: [...DEFAULT_PROTECTED_PATHS],

@@ -873,6 +873,9 @@ export const defaultClassifyAction: ClassifyAction = async (
     includeToolResults: config.includeToolResults,
     maxToolResultTokens: config.maxToolResultTranscriptTokens,
     maxToolResults: config.maxToolResultTranscriptEntries,
+    includeParentUserMessages: config.includeParentUserMessages,
+    maxParentUserTokens: config.maxParentUserTranscriptTokens,
+    maxParentUserMessages: config.maxParentUserTranscriptMessages,
   });
   const createdPaths = formatSessionCreatedPaths(sessionCreatedPaths);
   const contextText = `<loaded-project-instructions>\n${

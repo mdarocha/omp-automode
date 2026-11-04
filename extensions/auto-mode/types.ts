@@ -75,6 +75,12 @@ export type AutoModeSettings = {
   maxToolResultTranscriptTokens?: number;
   /** Keep at most this many recent tool results (default 10). */
   maxToolResultTranscriptEntries?: number;
+  /** Under an OMP subagent, add the main session's user messages to the classifier context (default true). */
+  includeParentUserMessages?: boolean;
+  /** Approximate-token budget for those messages (default 2000). */
+  maxParentUserTranscriptTokens?: number;
+  /** Keep at most this many of them (default 6). The first brief and ask answers are pinned. */
+  maxParentUserTranscriptMessages?: number;
   environment?: unknown;
   allow?: unknown;
   protectedPaths?: unknown;
@@ -129,6 +135,9 @@ export type EffectiveConfig = {
   includeToolResults: boolean;
   maxToolResultTranscriptTokens: number;
   maxToolResultTranscriptEntries: number;
+  includeParentUserMessages: boolean;
+  maxParentUserTranscriptTokens: number;
+  maxParentUserTranscriptMessages: number;
   environment: string[];
   allow: string[];
   protectedPaths: string[];
