@@ -152,6 +152,8 @@ export function baseConfig(overrides: Partial<EffectiveConfig> = {}): EffectiveC
 	return {
 		enabled: true,
 		classifyReadOnlyTools: false,
+		classifierStrategy: "staged",
+		judgeConfidence: 0.9,
 		allowInsideWorkingDirectory: false,
 		deniedPaths: [],
 		fastClassifierMaxTokens: 512,

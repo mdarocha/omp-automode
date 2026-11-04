@@ -1,3 +1,5 @@
+export type ClassifierStrategy = "staged" | "detailed" | "hybrid";
+
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -42,6 +44,10 @@ export type AutoModeSettings = {
   classifierReasoningLevel?: ClassifierReasoningLevel;
   /** When true, read-only tools (read/grep/find/ls) are classified instead of auto-allowed. */
   classifyReadOnlyTools?: boolean;
+  /** `staged` (default): one-token gate, then detailed review. `detailed`: detailed review only. `hybrid`: OMP judge first (OMP only), escalating to the detailed classifier. */
+  classifierStrategy?: ClassifierStrategy;
+  /** Probability a judge answer must reach on the safe side to approve an action (default 0.9). */
+  judgeConfidence?: number;
   /** Override the fast-stage completion token budget (default 512). */
   fastClassifierMaxTokens?: number;
   /** Per-request timeout for classifier completions in milliseconds (default 20000). */
@@ -92,6 +98,8 @@ export type EffectiveConfig = {
   classifierModel?: string;
   classifierReasoningLevel?: ClassifierReasoningLevel;
   classifyReadOnlyTools: boolean;
+  classifierStrategy: ClassifierStrategy;
+  judgeConfidence: number;
   fastClassifierMaxTokens: number;
   classifierTimeoutMs: number;
   allowInsideWorkingDirectory: boolean;
@@ -167,7 +175,7 @@ export type ClassificationDecision = {
 
 /** One classifier attempt: the raw model response (or error) and parsed decision. */
 export type ClassifierIoAttempt = {
-  stage: "fast" | "detailed";
+  stage: "judge" | "fast" | "detailed";
   attempt: number;
   response?: {
     stopReason?: string;
@@ -225,9 +233,16 @@ export type ConfigLoadResult = {
   diagnostics: string[];
 };
 
+/** Per-action hints the hook passes to the classifier. */
+export type ClassifyOptions = {
+  /** Skip the judge stage: the action was forced to review (`permissions.ask`) or is an `eval`. */
+  skipJudge?: boolean;
+};
+
 export type ClassifyAction = (
   ctx: ExtensionContext,
   config: EffectiveConfig,
   action: string,
   loadedContext: string,
+  options?: ClassifyOptions,
 ) => Promise<ClassifyResult>;

@@ -56,6 +56,20 @@ Each classifier failure gets a type: `rate_limit` (HTTP 429 or a rate or quota m
 
 A single `provider/model-id` has no fallback, but it gets the same retry, cooldown, and typed block. Jev has no retry or fallback; its failures are typed and block as `classifier-unavailable`. The decision log's `classifier` entries record, for each attempt, the serving model, `errorKind`, and `retryAfterMs`.
 
+### Classifier strategy and the OMP judge
+
+`classifierStrategy` chooses how a classified action is reviewed:
+
+- `staged` (default) asks for a one-token `0`/`1` gate and runs the detailed review only on `1`.
+- `detailed` skips the gate and always runs the detailed review. In a log of 11.9k decisions the gate passed 14% of actions and 99% of the rest were then allowed, so it cost more time than it saved (about 1.6 hours over 23 days).
+- `hybrid` (OMP only) first asks OMP's `judge` role chain four typed policy questions: a HARD_DENY match, a SOFT_DENY match, ALLOW-exception coverage, and direct user authorization. These are the questions Jev uses. Only a native judge such as TypeSafe Jev can approve, because it returns calibrated probabilities. Prompted chat models answer with probability 0 or 1, so `judgeConfidence` cannot gate them, and on-device models are too weak to approve anything. Both kinds are skipped. When the chain has no credentialed native judge, the judge stage is skipped with `judge-unavailable: no calibrated judge` in the attempt's error and the detailed classifier decides, as if no judge existed.
+
+The judge approves an action only when `P(no HARD_DENY) >= judgeConfidence` and either `P(no SOFT_DENY) >= judgeConfidence` or the larger of `P(ALLOW exception)` and `P(direct authorization)` reaches it. `judgeConfidence` defaults to 0.9 and must be above 0.5 and at most 1. Every other outcome goes to the detailed classifier on `classifierModel`: a doubtful answer, an unavailable or failing judge, no calibrated judge in the chain, an invalid answer, or a timeout.
+
+Deterministic hard denies, `permissions.deny`, and path denials run before any model. The judge never blocks and never has the last word on a doubtful action, so an inaccurate judge costs latency and cannot let a doubtful action through unreviewed. The remaining risk is a confident wrong approval, as with any model decision; raise `judgeConfidence` to require more certainty. An action that matched `permissions.ask` and an `eval` call always skip the judge. Jev as `classifierModel` is its own judge, so `hybrid` adds nothing for it, and under Pi `hybrid` behaves as `detailed`.
+
+The judge's model, token usage and cost appear as a `judge` attempt in the decision log's `classifier` entry and as a usage record. A skipped or doubtful judge shows its reason in that attempt's `error` (`judge-unavailable: no calibrated judge` or `escalated: ...`). The chain comes from OMP's `judge` role, so configure it in OMP and put a native judge such as `typesafe/jev-*` in it; a chain of chat models only makes `hybrid` behave as `detailed` with an extra lookup.
+
 For Pi/OMP chat models, `classifierReasoningLevel` requests `low`, `medium`, `high`, `xhigh`, or `max` reasoning for both classifier stages. If the key is absent, pi-automode sends no reasoning preference. The server then selects the level.
 
 Pi AI clamps an unsupported value to the nearest level that the selected model supports. A model without reasoning support resolves to `off`. `low` matches the reasoning effort of Codex Auto Review.
