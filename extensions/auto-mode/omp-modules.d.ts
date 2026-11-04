@@ -26,7 +26,34 @@ declare module "@oh-my-pi/pi-coding-agent/config/settings" {
 }
 
 declare module "@oh-my-pi/pi-coding-agent/judgment" {
+  type JudgeKind = "native" | "local" | "online";
+  type JudgmentResult = {
+    provider: string;
+    model: string;
+    answers: Record<string, { type: string; probabilities?: { yes: number; no: number } }>;
+    usage: import("@earendil-works/pi-ai").AssistantMessage["usage"];
+  };
+  interface Judge {
+    judge(
+      request: { state: unknown; questions: Record<string, unknown> },
+      options?: { signal?: AbortSignal },
+    ): Promise<JudgmentResult>;
+  }
   export function kindOf(candidate: {
     model: import("@earendil-works/pi-ai").Model<any>;
-  }): "native" | "local" | "online";
+  }): JudgeKind;
+  export function journalJudgmentUsage(manager: unknown): ((usage: unknown) => void) | undefined;
+  export function resolveJudge(deps: {
+    settings: unknown;
+    registry: unknown;
+    sessionModel?: import("@earendil-works/pi-ai").Model<any>;
+    sessionId?: string;
+    purpose: string;
+    onUsage?: (usage: unknown) => void;
+  }): {
+    withCandidate<T>(
+      run: (judge: Judge, kind: JudgeKind) => Promise<T>,
+      options?: { signal?: AbortSignal },
+    ): Promise<T>;
+  };
 }

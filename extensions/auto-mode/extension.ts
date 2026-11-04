@@ -159,6 +159,8 @@ import { safeJson, truncateMiddle } from "./utils.ts";
 
 const INSPECT_TOOL = "automode_inspect";
 const INSPECTION_ALLOW_REASON = "Extension-owned read-only inspection tool";
+/** A reason may already end its sentence; the unavailable notice adds its own. */
+const TRAILING_PERIODS = /\.+$/;
 const INSPECTION_ACTIONS = ["status", "config", "defaults", "denials"] as const;
 type InspectionAction = (typeof INSPECTION_ACTIONS)[number];
 
@@ -579,7 +581,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
 
     function blockedToolReason(denial: DenialRecord): string {
       const cause = denial.kind === "classifier-unavailable"
-        ? `${denial.reason.replace(/\.+$/, "")}. This is not a policy denial: auto mode could not review the action.`
+        ? `${denial.reason.replace(TRAILING_PERIODS, "")}. This is not a policy denial: auto mode could not review the action.`
         : denial.reason;
       return `[pi-automode] Action blocked; the tool did not run. ${cause} Do not claim success, rely on effects from this call, or attempt an equivalent workaround. Report the block to the user before continuing with dependent work. Independent work can continue.`;
     }
@@ -1256,7 +1258,12 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
           loadedContext,
           classifierNotes,
           state.createdPaths,
-          evalChecks ? evalClassifierHints(evalChecks) : undefined,
+          {
+            ...(evalChecks ? evalClassifierHints(evalChecks) : {}),
+            // An accepted ask rule demands full classifier review, and eval
+            // runs arbitrary code a probability cannot vouch for.
+            skipJudge: askRequiresClassifier || event.toolName === EVAL_TOOL,
+          },
         );
       } finally {
         classifierCallsInFlight -= 1;

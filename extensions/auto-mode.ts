@@ -26,6 +26,8 @@ export * from "./auto-mode/model.ts";
 export * from "./auto-mode/model-selector.ts";
 export * from "./auto-mode/omp.ts";
 export * from "./auto-mode/parent-session.ts";
+export * from "./auto-mode/judge.ts";
+export * from "./auto-mode/strategy.ts";
 export * from "./auto-mode/paths.ts";
 export * from "./auto-mode/permissions.ts";
 export * from "./auto-mode/provenance.ts";

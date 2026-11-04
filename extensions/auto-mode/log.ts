@@ -15,6 +15,7 @@ import type {
 } from "./types.ts";
 
 const CLASSIFIER_STAGE_BY_MODEL_STAGE: Record<ClassifierStage, DecisionStage> = {
+  judge: "classifier-judge",
   fast: "classifier-fast",
   detailed: "classifier-detailed",
 };

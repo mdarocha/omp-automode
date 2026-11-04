@@ -27,6 +27,7 @@ import {
 } from "./classifier-fallback.ts";
 import { formatModelSpec, jevModelId } from "./model.ts";
 import { loadOmpBridge } from "./omp.ts";
+import { runJudge } from "./judge.ts";
 import { classifyWithJev } from "./jev.ts";
 import { formatSessionCreatedPaths } from "./provenance.ts";
 import { buildClassifierTranscript } from "./transcript.ts";
@@ -839,6 +840,65 @@ export async function classifyInStages(
   return runDetailedStage();
 }
 
+/** Run the detailed review alone, without the one-token gate. */
+export async function classifyDetailed(
+  completeFn: ClassifierCompletionFn,
+  classifier: {
+    model: Model<any>;
+    apiKey?: string;
+    headers?: ProviderHeaders;
+    env?: Record<string, string>;
+  },
+  prompt: {
+    systemPrompt: string;
+    contextMessage: UserMessage;
+    actionMessage: UserMessage;
+  },
+  signal: AbortSignal | undefined,
+  options: StagedClassifierOptions,
+): Promise<ClassificationDecision> {
+  const detailedPrompt: ClassifierCompletionContext = {
+    systemPrompt: prompt.systemPrompt,
+    messages: [
+      prompt.contextMessage,
+      prompt.actionMessage,
+      stageMessage(CLASSIFIER_DETAILED_INSTRUCTION),
+    ],
+    tools: [CLASSIFIER_DECISION_TOOL],
+  };
+  const detailedLimitReason = classifierRequestLimitReason(
+    classifier.model.contextWindow,
+    classifier.model.maxTokens,
+    options.reasoningLevel,
+    DETAILED_CLASSIFIER_MAX_TOKENS,
+    "detailed",
+    detailedPrompt,
+  );
+  if (detailedLimitReason) {
+    return {
+      decision: "block",
+      tier: "none",
+      reason: detailedLimitReason,
+      failure: { kind: "context-limit", message: detailedLimitReason, stage: "detailed" },
+    };
+  }
+
+  return classifyWithRetry(
+    completeFn,
+    classifier,
+    detailedPrompt,
+    signal,
+    {
+      stage: "detailed",
+      sessionId: options.sessionId,
+      cacheRetention: "short",
+      timeoutMs: options.timeoutMs,
+      reasoningLevel: options.reasoningLevel,
+      onAttempt: options.onAttempt,
+    },
+  );
+}
+
 export function classifierCacheSessionId(ctx: ExtensionContext): string {
   const source = ctx.sessionManager.getSessionId?.() ??
     ctx.sessionManager.getSessionFile?.() ?? ctx.cwd;
@@ -890,11 +950,38 @@ export const defaultClassifyAction: ClassifyAction = async (
       : action;
     return classifyWithJev(config, jevAction, contextText, systemPrompt, ctx.signal);
   }
-  const { models, problem } = resolveClassifierModels(
-    ctx,
-    config,
-    await loadOmpBridge(),
-  );
+  const bridge = await loadOmpBridge();
+  const judgeAttempts: ClassifierIoAttempt[] = [];
+  if (config.classifierStrategy === "hybrid" && !hints?.skipJudge && bridge) {
+    const judged = await runJudge({
+      bridge,
+      ctx,
+      config,
+      systemPrompt,
+      contextText,
+      action,
+    });
+    judgeAttempts.push(judged.attempt);
+    if (judged.approved) {
+      return {
+        ...judged.approved,
+        io: {
+          model: judged.attempt.model ?? "judge",
+          reasoning: { mode: "server-default" },
+          prompt: {
+            system: systemPrompt,
+            context: contextText,
+            action,
+            fastInstruction: "",
+            detailedInstruction: "",
+          },
+          attempts: judgeAttempts,
+          durationMs: judged.attempt.durationMs,
+        },
+      };
+    }
+  }
+  const { models, problem } = resolveClassifierModels(ctx, config, bridge);
   if (models.length === 0) {
     const reason = `No classifier model/API key available${
       problem ? ` (${problem})` : ""
@@ -943,7 +1030,10 @@ export const defaultClassifyAction: ClassifyAction = async (
     }
     const attempts: ClassifierIoAttempt[] = [];
     const started = Date.now();
-    const decision = await classifyInStages(
+    const classify = config.classifierStrategy === "staged"
+      ? classifyInStages
+      : classifyDetailed;
+    const decision = await classify(
       completionPlan.completeFn,
       {
         model: auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model,
@@ -975,8 +1065,12 @@ export const defaultClassifyAction: ClassifyAction = async (
     };
   };
 
-  return classifyWithFallback(models, classifyWithModel, {
+  const result = await classifyWithFallback(models, classifyWithModel, {
     budgetMs: config.classifierTimeoutMs * DECISION_BUDGET_TIMEOUTS,
     signal: ctx.signal,
   });
+  // Keep the judge's attempt (and its cost) in the log next to the escalation.
+  return result.io === undefined || judgeAttempts.length === 0
+    ? result
+    : { ...result, io: { ...result.io, attempts: [...judgeAttempts, ...result.io.attempts] } };
 };

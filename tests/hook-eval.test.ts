@@ -303,7 +303,8 @@ test("non-eval tools never get eval hints", async () => {
 	const harness = await setupHookTest();
 	await harness.emit("tool_call", { toolName: "bash", input: { command: "ls" } }, harness.ctx);
 	assert.equal(harness.classifierCalls, 1);
-	assert.equal(harness.classifierHints[0], undefined);
+	assert.equal(harness.classifierHints[0]?.notes, undefined);
+	assert.equal(harness.classifierHints[0]?.skipFastStage, undefined);
 });
 
 test("eval allow rules: literal eval without commands is allowed, opaque eval is not", async () => {

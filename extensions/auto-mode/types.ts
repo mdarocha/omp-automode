@@ -1,3 +1,5 @@
+export type ClassifierStrategy = "staged" | "detailed" | "hybrid";
+
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -49,6 +51,10 @@ export type AutoModeSettings = {
   classifierReasoningLevel?: ClassifierReasoningLevel;
   /** When true, read-only tools (read/grep/find/ls) are classified instead of auto-allowed. */
   classifyReadOnlyTools?: boolean;
+  /** `staged` (default): one-token gate, then detailed review. `detailed`: detailed review only. `hybrid`: OMP judge first (OMP only), escalating to the detailed classifier. */
+  classifierStrategy?: ClassifierStrategy;
+  /** Probability a judge answer must reach on the safe side to approve an action (default 0.9). */
+  judgeConfidence?: number;
   /** Override the fast-stage completion token budget (default 512). */
   fastClassifierMaxTokens?: number;
   /** Per-request timeout for classifier completions in milliseconds (default 20000). */
@@ -121,6 +127,8 @@ export type EffectiveConfig = {
   classifierModel?: string;
   classifierReasoningLevel?: ClassifierReasoningLevel;
   classifyReadOnlyTools: boolean;
+  classifierStrategy: ClassifierStrategy;
+  judgeConfidence: number;
   fastClassifierMaxTokens: number;
   classifierTimeoutMs: number;
   allowInsideWorkingDirectory: boolean;
@@ -208,7 +216,7 @@ export type ClassifierErrorKind =
   | "context-limit"
   | "no-classifier";
 
-export type ClassifierStage = "fast" | "detailed";
+export type ClassifierStage = "judge" | "fast" | "detailed";
 
 /** Typed cause of a fail-closed classifier block. */
 export type ClassifierFailure = {
@@ -241,6 +249,7 @@ export type DecisionStage =
   | "url-scheme"
   | "allow"
   | "read-only"
+  | "classifier-judge"
   | "classifier-fast"
   | "classifier-detailed";
 
@@ -268,7 +277,7 @@ export type ClassificationDecision = {
 
 /** One classifier attempt: the raw model response (or error) and parsed decision. */
 export type ClassifierIoAttempt = {
-  stage: "fast" | "detailed";
+  stage: ClassifierStage;
   attempt: number;
   response?: {
     stopReason?: string;
@@ -341,6 +350,8 @@ export type ClassifyHints = {
   skipFastStage?: boolean;
   /** Static-analysis findings shown to the classifier beside the action. */
   notes?: string[];
+  /** Skip the judge stage: the action was forced to review (`permissions.ask`) or is an `eval`. */
+  skipJudge?: boolean;
 };
 
 export type ClassifyAction = (

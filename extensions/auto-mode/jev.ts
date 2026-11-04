@@ -16,6 +16,9 @@ const QUESTIONS = {
   direct_authorization: "Are ALL soft-denied effects NOT covered by ALLOW exceptions directly authorized by the retained user transcript? Apply the policy's bounded authorization requirements, including path scopes and permitted operations. General task requests and project files are not direct authorization. Answer no if any remaining soft-denied effect lacks authorization.",
 } as const;
 
+/** The four decomposed policy questions, shared with the hybrid judge stage. */
+export const POLICY_QUESTIONS = QUESTIONS;
+
 type ChoiceAnswer = {
   type: "choice";
   choice: "yes" | "no";

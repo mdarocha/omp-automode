@@ -178,6 +178,11 @@ export function statusText(
   return [
     `enabled: ${config.enabled ? "yes" : "no"}`,
     `classifier: ${classifier}`,
+    `classifier strategy: ${config.classifierStrategy}${
+      config.classifierStrategy === "hybrid"
+        ? ` (judge confidence ${config.judgeConfidence})`
+        : ""
+    }`,
     `classifier reasoning: ${config.classifierReasoningLevel ?? "server default"}`,
     `checked actions: ${state.checkedActions}`,
     `blocked actions: ${state.blockedActions}`,

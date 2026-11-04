@@ -19,9 +19,10 @@ For each Pi `tool_call` event, the extension does this:
 11. If an ask rule was accepted, skip all deterministic allow tiers.
 12. Otherwise, apply the read-only-root, `scheme://`, inside-working-directory, `permissions.allow`, read-only Bash, and read-only built-in tiers in that order. The read-only-root and read-only Bash tiers apply only when `readOnlyRoots` or `allowReadOnlyBash` is set.
 13. For a configured `typesafe/jev-*` classifier, evaluate typed policy questions in one native request.
-14. Otherwise, run the one-token conservative filter, followed by structured review when requested.
-15. Persist state and update the UI status and denial history.
-16. After an allowed `bash` or `write` call returns without an error, record the paths it created (see [Paths created by this session](#paths-created-by-this-session)).
+14. Otherwise, under `classifierStrategy: "hybrid"` (OMP only), ask a calibrated native judge from the `judge` role chain. It can only approve; a confident approval allows the call.
+15. Otherwise, run the detailed review directly (`detailed`, or `hybrid` after the judge), or the one-token conservative filter followed by structured review when requested (`staged`, the default).
+16. Persist state and update the UI status and denial history.
+17. After an allowed `bash` or `write` call returns without an error, record the paths it created (see [Paths created by this session](#paths-created-by-this-session)).
 
 The default posture is fail-closed. If model resolution, authentication, a classifier call, or response parsing fails, pi-automode blocks the action.
 
@@ -77,7 +78,11 @@ flowchart TD
   JV --> JV0{Valid answers allow action?}
   JV0 -- yes --> Q
   JV0 -- no or error --> R
-  N0 -- no --> N1[Run one-token filter]
+  N0 -- no --> NJ{hybrid and a calibrated native judge?}
+  NJ -- confident approval --> Q
+  NJ -- doubtful, no calibrated judge, or error --> ND[Run detailed review]
+  ND --> P1
+  NJ -- not hybrid --> N1[Run one-token filter]
   N1 --> O{Exact safe token?}
   O -- yes --> Q[Allow tool]
   O -- malformed or error --> O1[Block: fail closed]
@@ -426,6 +431,18 @@ The classifier receives at most the 30 newest paths. The block states what the l
 - The list does not override hard-deny rules, denied or protected paths, or any other deny rule such as exfiltration or credential handling.
 
 This list is evidence for the classifier only. Permission rules, hard-deny checks, `deniedPaths`, and protected-path handling run before the classifier and ignore it. Paths that contain control characters or angle brackets are never recorded or listed.
+
+## Classifier strategies and the judge stage
+
+`autoMode.classifierStrategy` picks the review path after the deterministic checks:
+
+- `staged` (default): the one-token gate, then the detailed review on `1`.
+- `detailed`: the detailed review only.
+- `hybrid` (OMP only): the judge stage, then the detailed review unless the judge approved.
+
+The judge stage asks OMP's `judge` role chain the four policy questions Jev uses. It runs only on a calibrated native judge (TypeSafe Jev). Prompted chat models answer one-hot, so `judgeConfidence` could not tell a sure answer from a guess, and on-device models are too weak. Both are skipped. When the chain has no usable native judge, the stage logs `judge-unavailable: no calibrated judge` as the attempt error and the detailed review decides.
+
+The judge approves only when the safe-side probabilities reach `judgeConfidence`. Anything else, including errors and timeouts, escalates. It never blocks, and actions forced to review by `permissions.ask`, plus `eval`, skip it. See [Classifier strategy and the OMP judge](configuration.md#classifier-strategy-and-the-omp-judge).
 
 ## Classifier model resolution
 

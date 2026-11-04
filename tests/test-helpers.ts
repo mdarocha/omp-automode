@@ -160,6 +160,8 @@ export function baseConfig(overrides: Partial<EffectiveConfig> = {}): EffectiveC
 	return {
 		enabled: true,
 		classifyReadOnlyTools: false,
+		classifierStrategy: "staged",
+		judgeConfidence: 0.9,
 		allowInsideWorkingDirectory: false,
 		headlessAsk: DEFAULT_HEADLESS_ASK,
 		deniedPaths: [],
