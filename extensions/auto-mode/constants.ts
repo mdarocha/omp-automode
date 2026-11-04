@@ -83,6 +83,9 @@ export const MAX_CLASSIFIER_TIMEOUT_MS = 2_147_483_647;
 /** Classifier selector OMP uses when `classifierModel` is unset: the `smol` role and its fallbacks. */
 export const DEFAULT_OMP_CLASSIFIER_SELECTOR = "@smol";
 
+/** Suffix that marks the active value in interactive option lists. */
+export const CURRENT_OPTION_MARKER = " (current)";
+
 /** Built-in trusted environment. Users extend this with `$defaults`. */
 export const DEFAULT_ENVIRONMENT = [
   "Trusted repo: the repository pi started in and its configured git remotes.",

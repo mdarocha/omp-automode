@@ -336,12 +336,42 @@ export type ConfigSourcePaths = {
   projectLocal: string;
   projectShared: string;
 };
+/** Settings the `/automode settings` menu can change. Keys under `autoMode.log` use dotted names. */
+export type SettingId =
+  | "enabled"
+  | "classifierStrategy"
+  | "classifierModel"
+  | "judgeConfidence"
+  | "classifierReasoningLevel"
+  | "log.enabled"
+  | "log.classifierIo";
+
+/** Where an effective setting value comes from. */
+export type SettingSource =
+  | { kind: "default" }
+  | { kind: "global"; path: string }
+  | { kind: "project-local"; path: string }
+  | { kind: "inline" };
+
+export type SettingsProvenance = Record<SettingId, SettingSource>;
+
+/** One change to the global config file. An undefined `classifierReasoningLevel` removes the key. */
+export type SettingUpdate =
+  | { key: "enabled"; value: boolean }
+  | { key: "classifierStrategy"; value: ClassifierStrategy }
+  | { key: "classifierModel"; value: string }
+  | { key: "judgeConfidence"; value: number }
+  | { key: "classifierReasoningLevel"; value: ClassifierReasoningLevel | undefined }
+  | { key: "log.enabled"; value: boolean }
+  | { key: "log.classifierIo"; value: boolean };
 
 export type ConfigLoadResult = {
   config: EffectiveConfig;
   diagnostics: string[];
   /** Absent when config loading is overridden. */
   sources?: ConfigSourcePaths;
+  /** Source of each editable setting. Absent when the config did not come from the settings loader. */
+  provenance?: SettingsProvenance;
 };
 
 /** Extra, extension-authored context for the classifier about one action. */

@@ -1,4 +1,5 @@
-import { realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -15,13 +16,57 @@ import {
 
 type Handler = (event: any, ctx: any) => unknown | Promise<unknown>;
 
+const INLINE_SETTINGS_ENV = "PI_AUTOMODE_SETTINGS_JSON";
+
+/** Run `run`, then `cleanup`, whether `run` returns a value or a promise. */
+function runThen<T>(run: () => T, cleanup: () => void): T {
+	try {
+		const result = run();
+		if (result instanceof Promise) {
+			// `result` is a promise, so T is that promise type.
+			return result.finally(cleanup) as T;
+		}
+		cleanup();
+		return result;
+	} catch (error) {
+		cleanup();
+		throw error;
+	}
+}
+
+function setEnv(name: string, value: string | undefined): void {
+	if (value === undefined) {
+		delete process.env[name];
+	} else {
+		process.env[name] = value;
+	}
+}
+
+/** Run with a throwaway directory that is removed afterwards. */
+export function withTempDir<T>(run: (dir: string) => T): T {
+	const dir = mkdtempSync(join(os.tmpdir(), "pi-automode-test-"));
+	return runThen(() => run(dir), () => rmSync(dir, { recursive: true, force: true }));
+}
+
+/** Run with an environment variable set (or deleted when `value` is undefined), then restore it. */
+export function withEnv<T>(name: string, value: string | undefined, run: () => T): T {
+	const previous = process.env[name];
+	setEnv(name, value);
+	return runThen(run, () => setEnv(name, previous));
+}
+
+/** Run with `PI_AUTOMODE_SETTINGS_JSON` set to the JSON of `inline`, or unset when `inline` is undefined. */
+export function withInline<T>(inline: unknown, run: () => T): T {
+	return withEnv(INLINE_SETTINGS_ENV, inline === undefined ? undefined : JSON.stringify(inline), run);
+}
+
 const EXTENSION_SOURCE = realpathSync(
 	join(dirname(fileURLToPath(import.meta.url)), "../extensions/auto-mode.ts"),
 );
 
 export function createFakePi() {
 	const handlers = new Map<string, Handler[]>();
-	const commands = new Map<string, { handler: Handler }>();
+	const commands = new Map<string, { handler: Handler; description?: string }>();
 	const tools = new Map<string, {
 		execute: (...args: any[]) => any;
 		sourceInfo: { path: string };
@@ -35,7 +80,7 @@ export function createFakePi() {
 		appendEntry(customType: string, data: unknown) {
 			entries.push({ type: "custom", customType, data: structuredClone(data) });
 		},
-		registerCommand(name: string, command: { handler: Handler }) {
+		registerCommand(name: string, command: { handler: Handler; description?: string }) {
 			commands.set(name, command);
 		},
 		registerTool(tool: {
