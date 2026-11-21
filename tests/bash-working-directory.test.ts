@@ -142,8 +142,28 @@ test("commands after an unresolved directory change stay hard-denied", () => {
 		"cd \"$TARGET\"; true; false || rm -rf relative-target",
 		// An absolute cd cannot restore a directory that may never have changed.
 		"cd \"$TARGET\"; cd /tmp; rm -rf relative-target",
+		// HOME=/CDPATH= reaching the current shell or code it runs.
+		"HOME=/; cd; rm -rf relative-target",
+		"export HOME=/; cd; rm -rf relative-target",
+		"HOME=/ eval cd; rm -rf relative-target",
+		"HOME=/ bash -c 'cd; rm -rf relative-target'",
+		"HOME=/ source ./env.sh; rm -rf relative-target",
+		"f() { cd; }; HOME=/ f; rm -rf relative-target",
+		"CDPATH=/ . ./env.sh; rm -rf relative-target",
 	]) {
 		assert.match(hardDeny(command) ?? "", UNRESOLVED, command);
+	}
+});
+
+test("HOME= and CDPATH= prefixes on an external command keep the directory known", () => {
+	for (const command of [
+		// Recorded false positive.
+		"HOME=/tmp/omphome omp config list --json >cfg-new.json; jq -r 'keys[]' cfg-old.json | sort >ko",
+		"env HOME=/tmp/omphome omp config list; printf x > relative-out",
+		"CDPATH=/ make build; rm -rf relative-target",
+		"HOME=/tmp/x PWD=/ git status; chmod 600 relative-file",
+	]) {
+		assert.equal(hardDeny(command), undefined, command);
 	}
 });
 
