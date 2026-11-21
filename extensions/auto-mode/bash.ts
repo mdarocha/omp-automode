@@ -739,7 +739,7 @@ export function analyzeBash(
         ) {
           analysis.errors.push({
             message:
-              "Executable pathname expansion cannot be resolved for deterministic safety checks",
+              "Executable pathname expansion cannot be resolved for deterministic safety checks; name the executable literally, resolving the glob in a separate call first",
             pos: invocation.pathnameExpandedExecutable.pos,
           });
         }

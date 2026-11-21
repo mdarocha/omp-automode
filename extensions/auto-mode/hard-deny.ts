@@ -600,7 +600,8 @@ function segmentHardDeny(
     Object.hasOwn(SAFETY_CONTROL_WRITERS, name) &&
     touchesSafetyControl(segment, cwd, policyCwd)
   ) {
-    return SAFETY_CONTROL_REASON;
+    // `sed -n`, `cp` from, or `python3 -c` reads also land here.
+    return `${SAFETY_CONTROL_REASON}; if the command only reads, use the read or grep tool`;
   }
 
   return undefined;

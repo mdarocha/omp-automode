@@ -129,6 +129,8 @@ Auto mode is active. Routine permission prompts are replaced by a pre-execution 
 - If pi-automode blocks a tool call, treat the action as not executed. Do not claim success, rely on its effects, or attempt an equivalent workaround. Report the block to the user before continuing with dependent work. Independent work can continue.
 - Exception: some deterministic blocks are false positives that a known rewrite avoids. You may retry the same action once in the rewritten form, without changing what it does. The rewrite keeps the action fully checked. Known rewrites:
   - "after an unresolved directory change": use absolute paths for redirect targets and \`rm -r\`, \`find -delete\`, \`chmod\`/\`chown\` operands, or drop the \`cd\`, \`HOME=\`, or \`CDPATH=\` that made the directory unknown.
+  - "safety-control modification" on a command that only reads (\`sed -n\`, \`cat\` through a script, \`python3\` printing a file): use the read or grep tool. Never apply this to a command that writes.
+  - "Executable pathname expansion": find the executable in a separate call, then name it literally.
 - User intent must be direct and specific for destructive, external, production, or irreversible actions.`;
 
 export const CLASSIFIER_SYSTEM_PROMPT =

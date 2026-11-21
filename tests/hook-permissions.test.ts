@@ -900,7 +900,7 @@ test("tool_call blocks pathname-expanded executables before broad Bash allows an
 			input: { command },
 		}, harness.ctx) as { block?: boolean; reason?: string } | undefined;
 		assert.equal(result?.block, true, command);
-		assert.match(result?.reason ?? "", /executable.*pathname expansion/i, command);
+		assert.match(result?.reason ?? "", /executable.*pathname expansion.*name the executable literally/i, command);
 	}
 	assert.equal(harness.classifierCalls, 0);
 });

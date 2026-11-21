@@ -21,6 +21,14 @@ test("deterministic hard deny catches safety-control edits", () => {
 	);
 });
 
+test("safety-control denials of reading commands point to the read tools", () => {
+	const command = `sed -n 1,20p ${join(os.homedir(), ".pi/agent/extensions/pi-automode/config.json")}`;
+	assert.match(
+		deterministicHardDeny("bash", { command }, "/tmp/project") ?? "",
+		/safety-control.*use the read or grep tool/,
+	);
+});
+
 test("deterministic hard deny protects global Pi extensions and settings", () => {
 	const agentDir = join(os.homedir(), ".pi/agent");
 	for (const path of [
