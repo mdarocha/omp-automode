@@ -2,10 +2,13 @@ import { basename } from "node:path";
 import {
   parse,
   type ArithmeticExpression,
-  type Node,
+  type Assignment,
+  type Command,
+  type ParameterExpansionPart,
   type ParseError,
   type ParsedScript,
-  type Redirect,
+  type Redirection,
+  type SyntaxNode,
   type TestExpression,
   type Word,
   type WordPart,
@@ -17,7 +20,7 @@ export type BashAnalysisError = {
 };
 
 export type BashRedirectAnalysis = {
-  operator: Redirect["operator"];
+  operator: Redirection["operator"];
   target?: string;
   targetDynamic: boolean;
   fileDescriptor?: number;
@@ -202,8 +205,95 @@ export function hasUnquotedPathnameExpansion(text: string): boolean {
   return false;
 }
 
-function wordParts(word: Word): WordPart[] {
+function wordParts(word: Word): readonly WordPart[] {
   return word.parts ?? [];
+}
+
+/** Syntax nodes that hold commands or redirects, which the walker visits. */
+type StructureNode = Extract<
+  SyntaxNode,
+  {
+    type:
+      | "Command"
+      | "Pipeline"
+      | "AndOr"
+      | "If"
+      | "For"
+      | "ArithmeticFor"
+      | "Select"
+      | "While"
+      | "Function"
+      | "Subshell"
+      | "BraceGroup"
+      | "CompoundList"
+      | "Case"
+      | "Coproc"
+      | "TestCommand"
+      | "ArithmeticCommand"
+      | "Statement"
+      | "Redirected";
+  }
+>;
+
+/** An assignment-looking argument (`export A=b`) as a word, like unbash 4 produced. */
+export function argumentWord(argument: Word | Assignment): Word {
+  if (argument.type === "Word") return argument;
+  const parts: WordPart[] = [...(argument.index?.parts ?? [])];
+  const value = argument.value;
+  for (const word of value.type === "Word" ? [value] : value.elements) {
+    parts.push(...(word.parts ?? []));
+  }
+  return {
+    type: "Word",
+    pos: argument.pos,
+    end: argument.end,
+    text: argument.text,
+    value: value.type === "Word"
+      ? argument.text.slice(0, argument.text.length - value.text.length) +
+        value.value
+      : argument.text,
+    parts,
+  };
+}
+
+function commandAssignments(command: Command): Assignment[] {
+  return command.prefix.filter(
+    (item): item is Assignment => item.type === "Assignment",
+  );
+}
+
+function redirectDescriptor(redirect: Redirection): {
+  fileDescriptor?: number;
+  variableName?: string;
+} {
+  const descriptor = redirect.descriptor;
+  if (!descriptor) return {};
+  return descriptor.type === "FileDescriptor"
+    ? { fileDescriptor: descriptor.value }
+    : { variableName: descriptor.name };
+}
+
+function isTerminatedSubstitution(text: string): boolean {
+  return text.startsWith("`") ? text.length > 1 && text.endsWith("`") : text.endsWith(")");
+}
+
+const ANSI_C_ESCAPE =
+  /\\(?:([0-7]{1,3})|x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|c([\s\S])|[\s\S])/g;
+
+/**
+ * Whether an ANSI-C quoted word (`$'…'`) contains an escape for NUL. Bash cuts
+ * the string at a NUL, and unbash 6 does too, so the parsed value no longer
+ * shows it; the escape is still a sign of an attempt to hide the text after it.
+ */
+function ansiCDecodesToNul(text: string): boolean {
+  for (const [, octal, hex, short, long, control] of text.matchAll(ANSI_C_ESCAPE)) {
+    if (octal !== undefined && (Number.parseInt(octal, 8) & 0xff) === 0) return true;
+    if (hex !== undefined && Number.parseInt(hex, 16) === 0) return true;
+    if (short !== undefined && Number.parseInt(short, 16) === 0) return true;
+    if (long !== undefined && Number.parseInt(long, 16) === 0) return true;
+    if (control !== undefined && (control.charCodeAt(0) & 0x1f) === 0) return true;
+  }
+  return false;
 }
 
 function wordIsStatic(word: Word): boolean {
@@ -227,6 +317,8 @@ function partIsStatic(part: WordPart): boolean {
     case "SingleQuoted":
     case "AnsiCQuoted":
       return true;
+    case "Glob":
+      return (part.parts ?? []).every(partIsStatic);
     case "DoubleQuoted":
       return part.parts.every((child) => child.type === "Literal");
     case "LocaleString":
@@ -430,7 +522,7 @@ function exhaustiveNode(_node: never): never {
   throw new Error(`Unsupported unbash AST node: ${JSON.stringify(_node)}`);
 }
 
-const REPEATED_NODE_TYPES: Partial<Record<Node["type"], true>> = {
+const REPEATED_NODE_TYPES: Partial<Record<StructureNode["type"], true>> = {
   While: true,
   For: true,
   Select: true,
@@ -462,19 +554,24 @@ export function analyzeBash(
     return analysis;
   }
 
-  function analyzeRedirect(redirect: Redirect): BashRedirectAnalysis {
+  function analyzeRedirect(redirect: Redirection): BashRedirectAnalysis {
+    // A here-document's "target" is its delimiter, which is not a word to expand.
+    const target = redirect.type === "HereDoc"
+      ? redirect.delimiter
+      : redirect.target;
     return {
       operator: redirect.operator,
-      target: redirect.target?.value,
-      targetDynamic: !!redirect.target && !wordIsStatic(redirect.target),
-      fileDescriptor: redirect.fileDescriptor,
-      variableName: redirect.variableName,
-      heredoc: redirect.operator === "<<" || redirect.operator === "<<-",
+      target: target?.value,
+      targetDynamic: redirect.type === "HereDoc"
+        ? /[$`]/.test(redirect.delimiter?.text ?? "")
+        : !!redirect.target && !wordIsStatic(redirect.target),
+      ...redirectDescriptor(redirect),
+      heredoc: redirect.type === "HereDoc",
     };
   }
 
   function visitRedirect(
-    redirect: Redirect,
+    redirect: Redirection,
     currentSource: string,
     depth: number,
     group = false,
@@ -482,17 +579,65 @@ export function analyzeBash(
     const redirectAnalysis = analyzeRedirect(redirect);
     analysis.redirects.push(redirectAnalysis);
     analysis.structure.push(
-      `redirect:${redirect.fileDescriptor ?? ""}:${redirect.variableName ?? ""}:${redirect.operator}:${redirectAnalysis.heredoc ? "heredoc" : "file"}`,
+      `redirect:${redirectAnalysis.fileDescriptor ?? ""}:${redirectAnalysis.variableName ?? ""}:${redirect.operator}:${redirectAnalysis.heredoc ? "heredoc" : "file"}`,
     );
-    if (redirect.target) visitWord(redirect.target, currentSource, depth);
-    if (redirect.body) visitWord(redirect.body, currentSource, depth);
-    const target = redirect.target?.value;
+    if (redirect.type === "HereDoc") {
+      if (redirect.body.text.includes("\0")) {
+        analysis.errors.push({
+          message: "Decoded NUL in a Bash word is unsupported",
+          pos: redirect.body.pos,
+        });
+      } else {
+        for (const part of redirect.body.parts ?? []) {
+          visitPart(part, currentSource, depth);
+        }
+      }
+    } else if (redirect.target) {
+      visitWord(redirect.target, currentSource, depth);
+    }
+    const target = redirectAnalysis.target;
     const writeTarget = redirectWriteTarget(redirectAnalysis);
     if (writeTarget) {
       analysis.writeRedirectTargets.push(writeTarget);
       if (group) analysis.groupWriteRedirectTargets.push(writeTarget);
     }
     return target;
+  }
+
+  function visitParameterOperation(
+    part: ParameterExpansionPart,
+    currentSource: string,
+    depth: number,
+  ): void {
+    const operation = part.operation;
+    switch (operation?.type) {
+      case undefined:
+      case "Names":
+        return;
+      case "Default":
+      case "Remove":
+      case "Transform":
+        visitWord(operation.operand, currentSource, depth);
+        return;
+      case "CaseModification":
+        if (operation.operand) visitWord(operation.operand, currentSource, depth);
+        return;
+      case "Replace":
+        visitWord(operation.pattern, currentSource, depth);
+        visitWord(operation.replacement, currentSource, depth);
+        return;
+      case "Slice":
+        visitWord(operation.offset, currentSource, depth);
+        if (operation.length) visitWord(operation.length, currentSource, depth);
+        return;
+      case "Unknown":
+        // The parser kept no operand, so its content cannot be checked.
+        analysis.errors.push({
+          message: `Unsupported parameter expansion operator: ${operation.operator}`,
+          pos: part.pos,
+        });
+        return;
+    }
   }
 
   function visitPart(
@@ -504,7 +649,10 @@ export function analyzeBash(
       case "Literal":
       case "SingleQuoted":
       case "AnsiCQuoted":
-        if (part.value.includes("\0")) {
+        if (
+          part.value.includes("\0") ||
+          (part.type === "AnsiCQuoted" && ansiCDecodesToNul(part.text))
+        ) {
           analysis.errors.push({
             message: "Decoded NUL in a Bash word part is unsupported",
           });
@@ -517,26 +665,22 @@ export function analyzeBash(
         for (const child of part.parts) visitPart(child, currentSource, depth);
         return;
       case "ParameterExpansion":
-        for (const indexPart of part.indexParts ?? []) {
-          visitPart(indexPart, currentSource, depth);
-        }
-        if (part.operand) visitWord(part.operand, currentSource, depth);
-        if (part.slice) {
-          visitWord(part.slice.offset, currentSource, depth);
-          if (part.slice.length) {
-            visitWord(part.slice.length, currentSource, depth);
-          }
-        }
-        if (part.replace) {
-          visitWord(part.replace.pattern, currentSource, depth);
-          visitWord(part.replace.replacement, currentSource, depth);
-        }
+        if (part.index) visitWord(part.index, currentSource, depth);
+        visitParameterOperation(part, currentSource, depth);
         return;
       case "CommandExpansion":
       case "ProcessSubstitution":
         analysis.structure.push(
           `part:${part.type}:${part.type === "ProcessSubstitution" ? part.operator : ""}`,
         );
+        // unbash cuts the pattern of `${x/$(a /b)/y}` at the slash inside the
+        // substitution, so the command it parsed is not the one bash runs.
+        if (!isTerminatedSubstitution(part.text)) {
+          analysis.errors.push({
+            message: "Unterminated command substitution in a Bash word is unsupported",
+            pos: part.pos,
+          });
+        }
         if (part.script) {
           visitScript(part.script, part.script.source ?? currentSource, depth);
         }
@@ -544,6 +688,11 @@ export function analyzeBash(
       case "ArithmeticExpansion":
         if (part.expression) {
           visitArithmetic(part.expression, currentSource, depth);
+        }
+        return;
+      case "Glob":
+        for (const nestedPart of part.parts ?? []) {
+          visitPart(nestedPart, currentSource, depth);
         }
         return;
       case "ExtendedGlob":
@@ -621,8 +770,9 @@ export function analyzeBash(
         visitWord(expression.right, currentSource, depth);
         return;
       case "TestLogical":
-        visitTest(expression.left, currentSource, depth);
-        visitTest(expression.right, currentSource, depth);
+        for (const operand of expression.operands) {
+          visitTest(operand, currentSource, depth);
+        }
         return;
       case "TestNot":
         visitTest(expression.operand, currentSource, depth);
@@ -633,25 +783,26 @@ export function analyzeBash(
     }
   }
 
-  function nodeStructureToken(node: Node): string {
+  /** Structure token of a node, or undefined for one that adds none. */
+  function nodeStructureToken(node: StructureNode): string | undefined {
     switch (node.type) {
       case "Command":
-        return `node:Command:${node.prefix.length}:${node.redirects.length}`;
+        return `node:Command:${commandAssignments(node).length}:${node.redirects.length}`;
       case "Pipeline":
-        return `node:Pipeline:${node.negated ? "negated" : "plain"}:${node.time ? "time" : "plain"}:${node.operators.join(",")}`;
+        return `node:Pipeline:${node.prefixes.some((prefix) => prefix.type === "Negation") ? "negated" : "plain"}:${node.prefixes.some((prefix) => prefix.type === "Time") ? "time" : "plain"}:${node.operators.join(",")}`;
       case "AndOr":
         return `node:AndOr:${node.operators.join(",")}`;
       case "If":
-        return `node:If:${node.else?.type ?? "none"}`;
+        return `node:If:${node.elif.length > 0 ? "If" : (node.else?.type ?? "none")}`;
       case "For":
       case "Select":
-        return `node:${node.type}:${node.wordlist.length}`;
+        return `node:${node.type}:${node.wordlist?.length ?? 0}`;
       case "ArithmeticFor":
         return `node:ArithmeticFor:${node.initialize ? 1 : 0}:${node.test ? 1 : 0}:${node.update ? 1 : 0}`;
       case "While":
         return `node:While:${node.kind}`;
       case "Function":
-        return `node:Function:${node.redirects.length}`;
+        return `node:Function:${node.body.type === "Redirected" ? node.body.redirects.length : 0}`;
       case "Subshell":
       case "BraceGroup":
       case "TestCommand":
@@ -662,9 +813,11 @@ export function analyzeBash(
       case "Case":
         return `node:Case:${node.items.map((item) => item.terminator ?? "none").join(",")}`;
       case "Coproc":
-        return `node:Coproc:${node.redirects.length}`;
+        return `node:Coproc:${node.body.type === "Redirected" ? node.body.redirects.length : 0}`;
       case "Statement":
-        return `node:Statement:${node.background ? "background" : "foreground"}:${node.redirects.length}`;
+        return `node:Statement:${node.background ? "background" : "foreground"}:${node.command.type === "Redirected" ? node.command.redirects.length : 0}`;
+      case "Redirected":
+        return undefined;
       default:
         return exhaustiveNode(node);
     }
@@ -674,7 +827,7 @@ export function analyzeBash(
   // inside them cannot assume an earlier position in the script.
   let repeatedDepth = 0;
 
-  function visitNode(node: Node, nodeSource: string, depth: number): void {
+  function visitNode(node: StructureNode, nodeSource: string, depth: number): void {
     if (!REPEATED_NODE_TYPES[node.type]) {
       visitNodeContents(node, nodeSource, depth);
       return;
@@ -688,11 +841,12 @@ export function analyzeBash(
   }
 
   function visitNodeContents(
-    node: Node,
+    node: StructureNode,
     nodeSource: string,
     depth: number,
   ): void {
-    analysis.structure.push(nodeStructureToken(node));
+    const token = nodeStructureToken(node);
+    if (token !== undefined) analysis.structure.push(token);
     if (
       node.type === "For" ||
       node.type === "Select" ||
@@ -707,8 +861,12 @@ export function analyzeBash(
     }
     switch (node.type) {
       case "Command": {
-        const prefixWords = node.prefix.map((prefix) => prefix.text);
-        const commandWords = node.name ? [node.name, ...node.suffix] : node.suffix;
+        const assignments = commandAssignments(node);
+        const argumentWords = node.args.map(argumentWord);
+        const prefixWords = assignments.map((assignment) => assignment.text);
+        const commandWords = node.name
+          ? [node.name, ...argumentWords]
+          : argumentWords;
         const renderedWords = [
           ...prefixWords,
           ...commandWords.map((word) => word.text),
@@ -732,7 +890,7 @@ export function analyzeBash(
             unresolvedTransparentDispatch: true,
             pathnameExpandedExecutable: pathnameExpandedName,
           }
-          : effectiveCommandInvocation(normalizedName, node.suffix);
+          : effectiveCommandInvocation(normalizedName, argumentWords);
         if (
           invocation.pathnameExpandedExecutable &&
           sourceKind === "command"
@@ -750,8 +908,8 @@ export function analyzeBash(
           text: renderedWords.join(" "),
           name: normalizedName,
           words: values,
-          args: node.suffix.map((word) => word.value),
-          argTexts: node.suffix.map((word) => word.text),
+          args: argumentWords.map((word) => word.value),
+          argTexts: argumentWords.map((word) => word.text),
           effectiveCommand: {
             name: invocation.name,
             args: invocation.argumentWords.map((word) => word.value),
@@ -778,16 +936,17 @@ export function analyzeBash(
           visitRedirect(redirect, nodeSource, depth);
         }
         if (node.name) visitWord(node.name, nodeSource, depth);
-        for (const prefix of node.prefix) {
-          if (prefix.value) visitWord(prefix.value, nodeSource, depth);
-          for (const word of prefix.array ?? []) {
+        for (const assignment of assignments) {
+          for (
+            const word of assignment.value.type === "Word"
+              ? [assignment.value]
+              : assignment.value.elements
+          ) {
             visitWord(word, nodeSource, depth);
           }
-          for (const part of prefix.indexParts ?? []) {
-            visitPart(part, nodeSource, depth);
-          }
+          if (assignment.index) visitWord(assignment.index, nodeSource, depth);
         }
-        for (const word of node.suffix) visitWord(word, nodeSource, depth);
+        for (const word of argumentWords) visitWord(word, nodeSource, depth);
 
         if (wrapperSource !== undefined) {
           analysis.structure.push(`wrapper:${wrapper?.name ?? normalizedName}`);
@@ -812,12 +971,20 @@ export function analyzeBash(
       case "If":
         visitNode(node.clause, nodeSource, depth);
         visitNode(node.then, nodeSource, depth);
+        for (const [index, elif] of node.elif.entries()) {
+          // An `elif` is a nested `if` in unbash 4; keep its structure token.
+          analysis.structure.push(
+            `node:If:${index + 1 < node.elif.length ? "If" : (node.else?.type ?? "none")}`,
+          );
+          visitNode(elif.clause, nodeSource, depth);
+          visitNode(elif.then, nodeSource, depth);
+        }
         if (node.else) visitNode(node.else, nodeSource, depth);
         return;
       case "For":
       case "Select":
         visitWord(node.name, nodeSource, depth);
-        for (const word of node.wordlist) {
+        for (const word of node.wordlist ?? []) {
           visitWord(word, nodeSource, depth);
         }
         visitNode(node.body, nodeSource, depth);
@@ -834,9 +1001,6 @@ export function analyzeBash(
         return;
       case "Function":
         visitWord(node.name, nodeSource, depth);
-        for (const redirect of node.redirects) {
-          visitRedirect(redirect, nodeSource, depth, true);
-        }
         visitNode(node.body, nodeSource, depth);
         return;
       case "Subshell":
@@ -859,9 +1023,6 @@ export function analyzeBash(
         return;
       case "Coproc":
         if (node.name) visitWord(node.name, nodeSource, depth);
-        for (const redirect of node.redirects) {
-          visitRedirect(redirect, nodeSource, depth, true);
-        }
         visitNode(node.body, nodeSource, depth);
         return;
       case "TestCommand":
@@ -873,6 +1034,9 @@ export function analyzeBash(
         }
         return;
       case "Statement":
+        visitNode(node.command, nodeSource, depth);
+        return;
+      case "Redirected":
         for (const redirect of node.redirects) {
           visitRedirect(redirect, nodeSource, depth, true);
         }

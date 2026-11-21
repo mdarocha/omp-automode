@@ -1,5 +1,5 @@
-import type { DeferredCommandExpansion, ParseError, Word, WordPart } from "./types.ts";
-export declare const MAX_SYNTAX_NESTING = 256;
+import type { HereDoc, ParseError, WordPart } from "./internal-types.ts";
+import { type SubstitutionContext } from "./substitution-context.ts";
 export declare const Token: {
     readonly Word: 0;
     readonly Assignment: 1;
@@ -46,9 +46,11 @@ export declare class TokenValue {
     _owner: Lexer | null;
     pos: number;
     end: number;
-    fileDescriptor?: number;
-    variableName?: string;
-    content?: string;
+    fileDescriptor: number | undefined;
+    variableName: string | undefined;
+    descriptorEnd: number;
+    delimiterQuoted: boolean;
+    content: string | undefined;
     targetPos: number;
     targetEnd: number;
     assignmentOperatorPos: number;
@@ -67,27 +69,39 @@ export declare const LexContext: {
     readonly CommandStart: 1;
     readonly TestMode: 2;
     readonly CommandPrefix: 3;
+    readonly Declaration: 4;
+    readonly ArrayElement: 5;
+    readonly FunctionName: 6;
+    readonly CasePattern: 7;
+    readonly EvalArgument: 8;
 };
 export type LexContext = (typeof LexContext)[keyof typeof LexContext];
 export declare class Lexer {
+    static _findSubstitutionEnd: ((source: string, start: number, end: number, depth: number, context: SubstitutionContext) => number) | undefined;
     private src;
     private srcEnd;
+    private parenBoundary;
     private pos;
     private current;
     private nextState;
     private hasPeek;
     private pendingHereDocs;
-    private collectedExpansions;
+    private substitutionContext;
     _errors: ParseError[] | null;
     _buildParts: boolean;
     _buildValue: boolean;
     _nestingDepth: number;
-    constructor(src: string, start?: number, end?: number);
+    constructor(src: string, start?: number, end?: number, parenBoundary?: boolean, context?: SubstitutionContext);
     getSource(): string;
+    fork(start: number, end: number, parenBoundary?: boolean): Lexer;
+    getSubstitutionContext(): SubstitutionContext;
     get errors(): ParseError[];
-    getCollectedExpansions(): [DeferredCommandExpansion, number][];
-    private collect;
+    private commandExpansion;
+    private decodedCommandExpansion;
+    private processSubstitution;
+    private scriptWindow;
     getPos(): number;
+    protected findSubstitutionEnd(start: number, end: number, depth?: number): number;
     /** Materialize a word token's value: raw spans slice directly, others re-lex the span. */
     _tokenValue(pos: number, end: number, raw: boolean): string;
     private wordValueOf;
@@ -105,6 +119,7 @@ export declare class Lexer {
     findArithmeticWordEnd(start: number, end?: number): number;
     private scanArithmeticWordEnd;
     private findClosingShellDelimiter;
+    private scanBraceExpansion;
     skipSubshellBody(): number;
     skipCompoundBody(closeToken: Token): number;
     skipTestGroup(): number;
@@ -112,14 +127,11 @@ export declare class Lexer {
     /** Set position and scan a word, building parts. Used by computeWordParts. */
     buildWordParts(startPos: number): WordPart[] | null;
     /** Scan a bounded word-like span without treating shell operators or whitespace as terminators. */
-    buildEmbeddedWordParts(startPos: number): WordPart[] | null;
+    buildEmbeddedWordParts(startPos: number, arithmetic?: boolean): WordPart[] | null;
+    buildArrayElementParts(startPos: number): WordPart[] | null;
     /** Scan a heredoc body for expansions, building parts. Spaces/newlines are literal. */
     buildHereDocParts(bodyPos: number, bodyEnd: number): WordPart[] | null;
-    registerHereDocTarget(target: {
-        content?: string;
-        heredocQuoted?: boolean;
-        body?: Word;
-    }): void;
+    registerHereDocTarget(target: HereDoc): void;
     readTestRegexWord(): TokenValue;
     readCStyleForExprs(): [string, string, string, number, number, number];
     peek(ctx?: LexContext): TokenValue;
@@ -129,23 +141,25 @@ export declare class Lexer {
     private readNext;
     private tryReadOperator;
     private readRedirection;
+    private readRedirectTarget;
     private readRedirectTargetText;
     private redirectToken;
     private readProcessSubstitution;
     private readHereDocDelimiter;
     private consumePendingHereDocs;
-    private readHereDocBody;
+    private hereDocClosingPos;
+    private hereDocClosingEnd;
     private matchHereDocDelimiter;
     private logicalLineEnd;
     private skipHereDocBody;
-    private parseHereDocBody;
     private _wordText;
     private _wordRaw;
     private _wordQuoted;
     private _wordHasExpansions;
     private _wordKeywordEligible;
-    private _wordIsAssignment;
-    private _wordAssignmentOperatorPos;
+    private _wordAssignmentState;
+    private _bracketWindow;
+    private _arithmeticBracketWindow;
     _wordParts: WordPart[] | null;
     private _resultText;
     private _resultIsRaw;
@@ -162,9 +176,11 @@ export declare class Lexer {
     private _hereQuoted;
     private readWord;
     private isRedirectVariable;
+    private readArrayElement;
     private classifyWord;
     private readWordText;
     private readInnerWordText;
+    private subFieldParts;
     private parseSubFieldWord;
     private skipSQ;
     private skipAnsiCQuoted;
@@ -174,7 +190,7 @@ export declare class Lexer {
     private readDollar;
     private scanArithmeticBody;
     private readArithmeticExpansion;
-    private buildArithmeticExpression;
+    private arithmeticExpansion;
     private readArithmeticCommand;
     private readCommandSubstitution;
     private readBraceCommandSubstitution;

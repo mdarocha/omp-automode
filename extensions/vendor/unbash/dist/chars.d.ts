@@ -39,3 +39,4 @@ export declare const CH_LBRACE = 123;
 export declare const CH_PIPE = 124;
 export declare const CH_RBRACE = 125;
 export declare const CH_TILDE = 126;
+export declare function skipLineContinuations(source: string, pos: number, end: number): number;

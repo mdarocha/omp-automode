@@ -2,11 +2,14 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
   parse,
-  type Node,
-  type Redirect,
+  type AndOr,
+  type Command,
+  type PipelineNode,
+  type Redirection,
   type Statement,
   type Word,
 } from "../vendor/unbash/dist/parser.js";
+import { argumentWord } from "./bash.ts";
 import { HOME } from "./constants.ts";
 import { isInside, isSafetyControlPath, resolveInputPath, resolvePathForPolicy } from "./paths.ts";
 import {
@@ -1324,9 +1327,12 @@ const COMMANDS: Record<string, Handler> = {
 // Shell structure
 // ---------------------------------------------------------------------------
 
-function checkRedirects(redirects: readonly Redirect[], env: ShellEnv): void {
+function checkRedirects(redirects: readonly Redirection[], env: ShellEnv): void {
   for (const redirect of redirects) {
-    if (redirect.variableName !== undefined) reject("redirect assigns a descriptor variable");
+    if (redirect.descriptor?.type === "FileDescriptorVariable") {
+      reject("redirect assigns a descriptor variable");
+    }
+    if (redirect.type === "HereDoc") reject(`redirect operator not allowed: ${redirect.operator}`);
     if (!redirect.target) reject("redirect without a target");
     const target = staticWord(redirect.target, "redirect target");
     if (FILE_WRITE_REDIRECTS.includes(redirect.operator)) {
@@ -1346,16 +1352,18 @@ function checkRedirects(redirects: readonly Redirect[], env: ShellEnv): void {
 }
 
 function visitCommand(
-  node: Extract<Node, { type: "Command" }>,
+  node: Command,
   env: ShellEnv,
   names: string[],
 ): void {
-  if (node.prefix.length > 0) reject("environment assignment before command");
+  if (node.prefix.some((item) => item.type === "Assignment")) {
+    reject("environment assignment before command");
+  }
   if (!node.name) reject("command without a name");
   const name = staticWord(node.name, "command name");
   if (!Object.hasOwn(COMMANDS, name)) reject(`command not allowed: ${name}`);
   checkRedirects(node.redirects, env);
-  const args = node.suffix.map((word) => staticWord(word, "argument"));
+  const args = node.args.map((arg) => staticWord(argumentWord(arg), "argument"));
   if (args.some((arg) => URL_ARGUMENT.test(arg))) reject("argument is a URL");
   const handler = COMMANDS[name];
   if (typeof handler === "function") handler(args, env);
@@ -1364,13 +1372,13 @@ function visitCommand(
   if (names.length > MAX_READ_ONLY_BASH_COMMANDS) reject("too many commands");
 }
 
-function visitPipelineOrCommand(node: Node, env: ShellEnv, names: string[]): void {
+function visitPipelineOrCommand(node: PipelineNode | AndOr, env: ShellEnv, names: string[]): void {
   if (node.type === "Command") {
     visitCommand(node, env, names);
     return;
   }
   if (node.type !== "Pipeline") reject(`unsupported shell construct: ${node.type}`);
-  if (node.negated || node.time) reject("negated or timed pipeline");
+  if (node.prefixes.length > 0) reject("negated or timed pipeline");
   for (const stage of node.commands) {
     if (stage.type !== "Command") reject(`unsupported pipeline stage: ${stage.type}`);
     visitCommand(stage, env, names);
@@ -1379,7 +1387,6 @@ function visitPipelineOrCommand(node: Node, env: ShellEnv, names: string[]): voi
 
 function visitStatement(statement: Statement, env: ShellEnv, names: string[]): void {
   if (statement.background) reject("background execution");
-  checkRedirects(statement.redirects, env);
   const node = statement.command;
   if (node.type !== "AndOr") {
     visitPipelineOrCommand(node, env, names);
@@ -1388,7 +1395,7 @@ function visitStatement(statement: Statement, env: ShellEnv, names: string[]): v
   for (const part of node.commands) visitPipelineOrCommand(part, env, names);
 }
 
-type LeadingCd = { target: string; chain: Node[] };
+type LeadingCd = { target: string; chain: PipelineNode[] };
 
 /** A first statement of `cd <absolute path>`, alone or heading a pure `&&` list. */
 function leadingCd(statement: Statement): LeadingCd | undefined {
@@ -1400,10 +1407,10 @@ function leadingCd(statement: Statement): LeadingCd | undefined {
   if (node.type === "AndOr" && !node.operators.every((operator) => operator === "&&")) {
     reject("`cd` is only allowed at the head of a pure `&&` list");
   }
-  if (head.prefix.length > 0 || head.redirects.length > 0 || head.suffix.length !== 1) {
+  if (head.prefix.length > 0 || head.redirects.length > 0 || head.args.length !== 1) {
     reject("`cd` must take exactly one plain argument");
   }
-  const target = staticWord(head.suffix[0], "cd target");
+  const target = staticWord(argumentWord(head.args[0]), "cd target");
   if (!target.startsWith("/")) reject("`cd` needs an absolute path");
   return { target, chain };
 }
@@ -1420,7 +1427,6 @@ function visitScript(statements: readonly Statement[], env: ShellEnv, names: str
     for (const statement of statements) visitStatement(statement, env, names);
     return;
   }
-  checkRedirects(first.redirects, env);
   const inside = enterDirectory(env, lead.target);
   for (const part of lead.chain) visitPipelineOrCommand(part, inside, names);
   for (const statement of rest) {
