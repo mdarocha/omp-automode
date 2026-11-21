@@ -321,13 +321,16 @@ test("the hook lets commands past hard-deny when only a later directory change i
 	assert.equal(harness.classifierCalls, 0);
 });
 
-test("unresolved-directory denials tell the model to use absolute paths", () => {
-	for (const command of [
-		"cd \"$TARGET\"; printf x > relative-out",
-		"cd \"$TARGET\"; rm -rf relative-target",
-		"cd \"$TARGET\"; find build -delete",
-		"cd \"$TARGET\"; chmod 600 relative-file",
-	]) {
-		assert.match(hardDeny(command) ?? "", /use absolute paths/, command);
+test("unresolved-directory denials name a rewrite that passes the hard-deny", () => {
+	const out = join(projectDirectory, "build");
+	for (const [command, hint, rewrite] of [
+		["cd \"$TARGET\"; printf x > relative-out", /use absolute paths/, `cd "$TARGET"; printf x > ${out}/out`],
+		["cd \"$TARGET\"; rm -rf relative-target", /use absolute paths/, `cd "$TARGET"; rm -rf ${out}`],
+		["cd \"$TARGET\"; find build -delete", /use absolute paths/, `cd "$TARGET"; find ${out} -delete`],
+		["cd \"$TARGET\"; rm -rf build", /give cd a literal absolute directory/, `cd ${projectDirectory}; rm -rf build`],
+		["cd \"$TARGET\"; chmod 600 relative-file", /give cd a literal absolute directory/, `cd ${projectDirectory}; chmod 600 relative-file`],
+	] as const) {
+		assert.match(hardDeny(command) ?? "", hint, command);
+		assert.equal(hardDeny(rewrite), undefined, rewrite);
 	}
 });

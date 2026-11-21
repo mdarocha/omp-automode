@@ -368,9 +368,9 @@ function firstDirectoryHardDeny(
   return undefined;
 }
 
-// Also fires on `HOME=`/`CDPATH=` assignments, which can be false positives.
-const UNRESOLVED_DIRECTORY_HINT =
-  "use absolute paths, or drop the cd/HOME=/CDPATH= that makes the directory unknown";
+// Replacing a dynamic `cd` target with its literal absolute directory keeps the command's meaning.
+const ABSOLUTE_CD_HINT = "give cd a literal absolute directory";
+const UNRESOLVED_DIRECTORY_HINT = `use absolute paths, or ${ABSOLUTE_CD_HINT}`;
 
 const SAFETY_CONTROL_REASON =
   "auto-mode or permission safety-control modification is hard-denied";
@@ -402,6 +402,18 @@ const SAFETY_CONTROL_WRITERS: Record<string, true> = {
   rm: true,
   unlink: true,
   truncate: true,
+  python: true,
+  python3: true,
+  node: true,
+  perl: true,
+  ruby: true,
+  sd: true,
+  sed: true,
+};
+
+/** Writers that can also just read a control, such as `sed -n` or `cp` from it. */
+const SAFETY_CONTROL_READERS: Record<string, true> = {
+  cp: true,
   python: true,
   python3: true,
   node: true,
@@ -579,7 +591,8 @@ function segmentHardDeny(
     for (const arg of args.filter((arg) => !arg.startsWith("-"))) {
       const resolved = resolveTokenPath(arg, cwd);
       if (resolved.unresolved) {
-        return `relative permission mutation after an unresolved directory change is hard-denied; ${UNRESOLVED_DIRECTORY_HINT}`;
+        // The mode or owner operand is not a path, so absolute file paths alone cannot pass.
+        return `relative permission mutation after an unresolved directory change is hard-denied; ${ABSOLUTE_CD_HINT}`;
       }
       const path = resolved.path;
       if (
@@ -601,7 +614,9 @@ function segmentHardDeny(
     touchesSafetyControl(segment, cwd, policyCwd)
   ) {
     // `sed -n`, `cp` from, or `python3 -c` reads also land here.
-    return `${SAFETY_CONTROL_REASON}; if the command only reads, use the read or grep tool`;
+    return Object.hasOwn(SAFETY_CONTROL_READERS, name)
+      ? `${SAFETY_CONTROL_REASON}; if the command only reads, use the read or grep tool`
+      : SAFETY_CONTROL_REASON;
   }
 
   return undefined;
