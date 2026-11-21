@@ -39,3 +39,8 @@ export const CH_LBRACE = 123;
 export const CH_PIPE = 124;
 export const CH_RBRACE = 125;
 export const CH_TILDE = 126;
+export function skipLineContinuations(source, pos, end) {
+    while (pos + 1 < end && source.charCodeAt(pos) === CH_BACKSLASH && source.charCodeAt(pos + 1) === CH_NL)
+        pos += 2;
+    return pos;
+}
