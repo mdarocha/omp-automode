@@ -2,7 +2,7 @@
 
 Auto mode guardrails for Oh My Pi (OMP) and Pi, with configurable TypeSafe Jev or Pi/OMP classifier models.
 
-This is [royce-mathew/omp-automode](https://github.com/royce-mathew/omp-automode), a fork of [czottmann/pi-automode](https://github.com/czottmann/pi-automode) by Carlo Zottmann. The upstream MIT license and attribution are retained. The fork's package name is `@royce-mathew/omp-automode`; its commands and existing configuration paths remain compatible with pi-automode.
+This is [mdarocha/omp-automode](https://github.com/mdarocha/omp-automode), a fork of [royce-mathew/omp-automode](https://github.com/royce-mathew/omp-automode), which in turn forks [czottmann/pi-automode](https://github.com/czottmann/pi-automode) by Carlo Zottmann. The upstream MIT license and attribution are retained. The package name stays `@royce-mathew/omp-automode`, and commands and existing configuration paths remain compatible with pi-automode.
 
 This is a guardrail extension. It intercepts agent tool calls before execution and blocks actions that match permission deny rules, deterministic hard-deny checks, or the auto-mode classifier's block decision.
 
@@ -10,22 +10,62 @@ It is not a sandbox. Extensions run in the Pi process. A malicious extension can
 
 Pi-automode does not guard user `!` or `!!` shell commands. It guards only agent tool calls. Use it to reduce unsafe autonomous tool use. Do not use it as an OS security boundary.
 
+## About this fork
+
+This fork tracks current OMP releases and is used daily as a guardrail for long autonomous OMP sessions. Most changes come from reading the decision logs of those sessions: false positives that stopped legitimate work, bypasses found while reviewing them, and OMP features the extension did not understand yet. Changes land through reviewed pull requests with tests, and CI runs `npm run check`, `npm test`, and `npm pack --dry-run` on every push. [CHANGELOG.md](CHANGELOG.md) describes each change in detail.
+
+### Changes compared with royce-mathew/omp-automode
+
+OMP support:
+
+- OMP 19 support: tools that OMP runs as Bash commands (`lsp`, `github`, …) are reviewed once, through their Bash call.
+- Config in OMP's own directory (`<agentDir>/automode/config.json`, `.omp/automode*.json`), with profiles and `PI_CONFIG_DIR` honoured, and `.omp` safety-control paths.
+- `classifierModel` accepts OMP model roles such as `@smol`, and falls back along the role's chain when a model fails.
+- `/automode settings` menu and OMP's native model picker for `/automode model`.
+- Classifier strategies (`staged`, `detailed`, `hybrid`), where `hybrid` lets a calibrated judge approve clear cases quickly.
+- `permissions.ask` in subagents asks the main session's UI (`headlessAsk`).
+- Agent Hub entry per session, a compact status segment, `/tan` clones, and subagents following `/automode on|off`.
+- `eval` cells are scanned for embedded shell commands.
+
+Fewer false positives:
+
+- Opt-in `allowReadOnlyBash` and `readOnlyRoots` tiers for provably read-only calls.
+- An unresolved `cd` affects only the commands after it. `HOME=` prefixes on external programs keep the directory known.
+- Hard-deny reasons name a rewrite that passes the checks, such as absolute paths.
+- `grep` is narrowed around `deniedPaths` rather than blocked.
+- Source checkouts of this extension, and files under `~/.omp/wt`, are not treated as active controls. Self-protection targets the copy that is actually loaded.
+- The classifier sees which paths the session created itself.
+
+Bypasses closed:
+
+- OMP read selectors and path lists (`~/.netrc:1-2`, `a;~/.netrc`) and `scheme://` paths were checked as the wrong path.
+- Read-only `git` could run programs set in the repository config.
+- Project instructions could forge transcript evidence for the classifier.
+- Hard-deny checks read every file target of OMP's multi-file edits.
+
+Observability: typed classifier failures, more decision-log fields (`durationMs`, `stage`, `agent`, `errorKind`), and a richer `automode_inspect` status.
+
+### Changes in royce-mathew/omp-automode compared with czottmann/pi-automode
+
+- Optional native TypeSafe Jev classification (`classifierModel: "typesafe/jev-latest"`).
+- OMP marketplace catalog and runtime extension manifest.
+- Answers from OMP's built-in `ask` tool count as authorization evidence.
+- Transcript evidence serialized as JSONL with explicit provenance, human evidence budgets, and worker authorization from ancestor sessions.
+
 ## Compatibility
 
-Pi-automode supports Pi and Oh My Pi (OMP) 18. It automatically uses OMP's legacy completion API. The integration needs no OMP-specific configuration.
+Pi-automode supports Pi and Oh My Pi (OMP) 18 and 19. It automatically uses OMP's legacy completion API. The integration needs no OMP-specific configuration.
 
 ## Install
 
 ### OMP marketplace
 
-After these changes are committed and pushed to the fork:
-
 ```text
-/marketplace add royce-mathew/omp-automode
+/marketplace add mdarocha/omp-automode
 /marketplace install omp-automode@omp-automode
 ```
 
-The full Git URL also works: `/marketplace add https://github.com/royce-mathew/omp-automode`. The repository includes `.omp-plugin/marketplace.json` and declares the runtime extension through `package.json`'s `omp.extensions`.
+The full Git URL also works: `/marketplace add https://github.com/mdarocha/omp-automode`. The repository includes `.omp-plugin/marketplace.json` and declares the runtime extension through `package.json`'s `omp.extensions`.
 
 The Git tree includes the pinned `unbash` parser, so marketplace installs do not need a separate npm install. OMP supplies the Pi-compatible host APIs.
 
