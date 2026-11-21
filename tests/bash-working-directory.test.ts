@@ -320,3 +320,14 @@ test("the hook lets commands past hard-deny when only a later directory change i
 	assert.match(blocked?.reason ?? "", /unresolved directory change/);
 	assert.equal(harness.classifierCalls, 0);
 });
+
+test("unresolved-directory denials tell the model to use absolute paths", () => {
+	for (const command of [
+		"cd \"$TARGET\"; printf x > relative-out",
+		"cd \"$TARGET\"; rm -rf relative-target",
+		"cd \"$TARGET\"; find build -delete",
+		"cd \"$TARGET\"; chmod 600 relative-file",
+	]) {
+		assert.match(hardDeny(command) ?? "", /use absolute paths/, command);
+	}
+});

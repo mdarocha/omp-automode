@@ -368,6 +368,10 @@ function firstDirectoryHardDeny(
   return undefined;
 }
 
+// Also fires on `HOME=`/`CDPATH=` assignments, which can be false positives.
+const UNRESOLVED_DIRECTORY_HINT =
+  "use absolute paths, or drop the cd/HOME=/CDPATH= that makes the directory unknown";
+
 const SAFETY_CONTROL_REASON =
   "auto-mode or permission safety-control modification is hard-denied";
 
@@ -378,7 +382,7 @@ function redirectHardDeny(
 ): string | undefined {
   const resolved = resolveTokenPath(target, cwd);
   if (resolved.unresolved) {
-    return "relative Bash redirect after an unresolved directory change is hard-denied";
+    return `relative Bash redirect after an unresolved directory change is hard-denied; ${UNRESOLVED_DIRECTORY_HINT}`;
   }
   const path = resolved.path;
   if (!path) return undefined;
@@ -540,7 +544,7 @@ function segmentHardDeny(
         }
         const resolved = resolveTokenPath(arg, cwd, shellText);
         if (resolved.unresolved) {
-          return "relative recursive deletion after an unresolved directory change is hard-denied";
+          return `relative recursive deletion after an unresolved directory change is hard-denied; ${UNRESOLVED_DIRECTORY_HINT}`;
         }
         const path = resolved.path;
         const policyPath = path ? (resolvePathForPolicy(path) ?? path) : undefined;
@@ -557,7 +561,7 @@ function segmentHardDeny(
     while (["-H", "-L", "-P"].includes(args[rootIndex] ?? "")) rootIndex++;
     const resolvedRoot = resolveTokenPath(args[rootIndex] ?? "", cwd);
     if (resolvedRoot.unresolved) {
-      return "relative find deletion after an unresolved directory change is hard-denied";
+      return `relative find deletion after an unresolved directory change is hard-denied; ${UNRESOLVED_DIRECTORY_HINT}`;
     }
     const root = resolvedRoot.path;
     const policyRoot = root ? (resolvePathForPolicy(root) ?? root) : undefined;
@@ -575,7 +579,7 @@ function segmentHardDeny(
     for (const arg of args.filter((arg) => !arg.startsWith("-"))) {
       const resolved = resolveTokenPath(arg, cwd);
       if (resolved.unresolved) {
-        return "relative permission mutation after an unresolved directory change is hard-denied";
+        return `relative permission mutation after an unresolved directory change is hard-denied; ${UNRESOLVED_DIRECTORY_HINT}`;
       }
       const path = resolved.path;
       if (
