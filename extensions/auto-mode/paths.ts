@@ -33,7 +33,8 @@ import {
 } from "./constants.ts";
 import type { ActiveControls } from "./types.ts";
 
-const PROJECT_CONFIG_DIR = /\/\.(?:pi|omp)\//;
+/** A file directly inside a `.pi` or `.omp` directory; deeper paths such as `~/.omp/wt/<checkout>/…` are not project config. */
+const PROJECT_CONFIG_DIR = /\/\.(?:pi|omp)\/[^/]+$/;
 const PROJECT_CONFIG_EXTENSIONS_DIR = /\/\.(?:pi|omp)\/extensions\//;
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
@@ -378,6 +379,9 @@ function isGlobalSafetyControlPath(normalized: string): boolean {
   const piAgentRoot = normalizeProtectedPathForMatch(PI_AGENT_DIR);
   if (
     normalized === `${piAgentRoot}/settings.json` ||
+    // Legacy global config (`automode.json`), migrated into effect on startup.
+    (dirname(normalized) === piAgentRoot &&
+      basename(normalized).startsWith("automode")) ||
     isUnderRoot(normalized, `${piAgentRoot}/extensions`) ||
     isUnderRoot(normalized, `${piAgentRoot}/settings`)
   ) {

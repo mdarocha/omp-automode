@@ -116,6 +116,30 @@ test("shell parsing catches risky suffixes, redirects, and quoted HOME targets",
 	);
 });
 
+test("automode-named files below a .omp or .pi ancestor are not project config", () => {
+	// Recorded false positive: worktrees live under ~/.omp/wt.
+	const worktree = join(os.homedir(), ".omp/wt/automode-compat-b9de03f");
+	for (const command of [
+		"sed -n 198,212p docs/automode-classifier-flow.md",
+		"sed -i s/a/b/ docs/automode-classifier-flow.md",
+		"cp /tmp/x .pi/sub/automode.json",
+	]) {
+		assert.equal(deterministicHardDeny("bash", { command }, worktree), undefined, command);
+	}
+	for (const path of [
+		".omp/automode.json",
+		".pi/automode.local.json",
+		"sub/.omp/automode.json.bak",
+		join(os.homedir(), ".pi/agent/automode.json"),
+	]) {
+		assert.match(
+			deterministicHardDeny("write", { path }, worktree) ?? "",
+			/safety-control/,
+			path,
+		);
+	}
+});
+
 test("AST hard-deny checks inspect nested and background commands", () => {
 	for (const command of [
 		'echo "$(git config --global http.sslVerify false)"',
