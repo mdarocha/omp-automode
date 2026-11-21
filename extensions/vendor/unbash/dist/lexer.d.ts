@@ -153,6 +153,7 @@ export declare class Lexer {
     private _resultPart;
     private _unbalanced;
     private _notArithmetic;
+    private _arithUnterminated;
     private _dqText;
     private _dqHasExpansions;
     private _dqParts;
@@ -160,6 +161,7 @@ export declare class Lexer {
     private _hereDelim;
     private _hereQuoted;
     private readWord;
+    private isRedirectVariable;
     private classifyWord;
     private readWordText;
     private readInnerWordText;
@@ -181,6 +183,7 @@ export declare class Lexer {
     private readBacktickExpansion;
     private readParameterExpansion;
     private parseParamInner;
+    private findNestedShellEnd;
     private scanParamName;
     private readAnsiCQuoted;
     private extractBalanced;

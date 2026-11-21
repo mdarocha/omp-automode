@@ -7,6 +7,8 @@ updates:
     ignore:
       # Vendored into extensions/vendor; bump deliberately with `npm run vendor:unbash`.
       - dependency-name: unbash
+      # Must equal the exact version Pi pins, or a second copy breaks schema typing.
+      - dependency-name: typebox
     groups:
       npm:
         patterns: ["*"]
