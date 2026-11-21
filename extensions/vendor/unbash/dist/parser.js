@@ -462,7 +462,7 @@ class Parser {
             return node;
         return this.makeStatement(node, redirects);
     }
-    // pipeline := ['time' ['-p']] ['!'] command ('|' newlines command)*
+    // pipeline := ['time' ['-p']] ('!')* command ('|' newlines command)*
     pipeline() {
         let time = false;
         let pipelinePos = 0;
@@ -477,30 +477,25 @@ class Parser {
             if (flag.token === Token.Word && flag.keywordEligible && flag.value === "-p")
                 prefixEnd = this.tok.next(LexContext.CommandStart).end;
         }
-        let negated = false;
+        let negated;
         const bang = this.tok.peek(LexContext.CommandStart);
         if (bang.token === Token.Bang) {
             if (!time)
                 pipelinePos = bang.pos;
-            prefixEnd = this.tok.next(LexContext.CommandStart).end;
-            negated = true;
-            const repeated = this.tok.peek(LexContext.CommandStart);
-            if (repeated.token === Token.Bang) {
-                this.error("unexpected token '!'", repeated.pos);
-                do {
-                    prefixEnd = this.tok.next(LexContext.CommandStart).end;
-                } while (this.tok.peek(LexContext.CommandStart).token === Token.Bang);
-            }
+            do {
+                prefixEnd = this.tok.next(LexContext.CommandStart).end;
+                negated = !negated;
+            } while (this.tok.peek(LexContext.CommandStart).token === Token.Bang);
         }
         const first = this.command();
         if (!first) {
-            if (time || negated) {
+            if (time || negated !== undefined) {
                 const pipeline = {
                     type: "Pipeline",
                     pos: pipelinePos,
                     end: prefixEnd,
                     commands: [],
-                    negated: negated ? true : undefined,
+                    negated,
                     operators: [],
                     time: time ? true : undefined,
                 };
@@ -508,7 +503,7 @@ class Parser {
             }
             return null;
         }
-        if (!time && !negated)
+        if (!time && negated === undefined)
             pipelinePos = first.pos;
         const commands = [first];
         const operators = [];
@@ -531,7 +526,7 @@ class Parser {
             operators.push(operator);
             commands.push(this.wrapCompoundRedirects(cmd));
         }
-        if (commands.length === 1 && !negated && !time) {
+        if (commands.length === 1 && negated === undefined && !time) {
             // Pass redirects up for list() to consume
             this._redirects = firstRedirects;
             return commands[0];
@@ -545,7 +540,7 @@ class Parser {
             pos: pipelinePos,
             end: commands[commands.length - 1].end,
             commands,
-            negated: negated ? true : undefined,
+            negated,
             operators,
             time: time ? true : undefined,
         };
@@ -678,6 +673,8 @@ class Parser {
         this.syntaxDepth++;
         const commands = this.list();
         this.syntaxDepth--;
+        if (commands.length === 0)
+            this.error("expected command in subshell", pos);
         const closeEnd = this.acceptEnd(Token.RParen, LexContext.Normal);
         if (closeEnd < 0)
             this.error("expected ')' to close subshell", this.tok.getPos());
@@ -700,6 +697,8 @@ class Parser {
         this.syntaxDepth++;
         const commands = this.list();
         this.syntaxDepth--;
+        if (commands.length === 0)
+            this.error("expected command in brace group", pos);
         const closeEnd = this.acceptEnd(Token.RBrace, LexContext.Normal);
         if (closeEnd < 0)
             this.error("expected '}' to close brace group", this.tok.getPos());
@@ -735,9 +734,13 @@ class Parser {
         for (;;) {
             clause = this.makeCompoundList(this.list());
             this.skipSemi();
-            if (!this.accept(Token.Then, LexContext.CommandStart))
+            const thenToken = this.accept(Token.Then, LexContext.CommandStart);
+            if (!thenToken)
                 this.error("expected 'then'", this.tok.getPos());
-            then_ = this.makeCompoundList(this.list());
+            const thenCommands = this.list();
+            if (thenToken && thenCommands.length === 0)
+                this.error("expected command after 'then'", this.tok.peek(LexContext.CommandStart).pos);
+            then_ = this.makeCompoundList(thenCommands);
             this.skipSemi();
             const elif = this.accept(Token.Elif, LexContext.CommandStart);
             if (!elif)
@@ -934,15 +937,17 @@ class Parser {
             }
             const rparenEnd = this.acceptEnd(Token.RParen, LexContext.Normal);
             const cmds = this.list();
-            let itemEnd = rparenEnd >= 0 ? rparenEnd : itemPos;
-            if (cmds.length > 0)
-                itemEnd = cmds[cmds.length - 1].end;
+            // An empty body belongs where commands would start, not wherever the lexer stopped.
+            const bodyPos = rparenEnd >= 0 ? rparenEnd : pattern.length > 0 ? pattern[pattern.length - 1].end : itemPos;
+            const itemEnd = cmds.length > 0 ? cmds[cmds.length - 1].end : bodyPos;
             const item = {
                 type: "CaseItem",
                 pos: itemPos,
                 end: itemEnd,
                 pattern,
-                body: this.makeCompoundList(cmds),
+                body: cmds.length > 0
+                    ? this.makeCompoundList(cmds)
+                    : { type: "CompoundList", pos: bodyPos, end: bodyPos, commands: [] },
                 terminator: undefined,
             };
             t = this.tok.peek(LexContext.CommandStart).token;
@@ -1109,10 +1114,10 @@ class Parser {
         const val = first.value;
         const firstPos = first.pos;
         const firstEnd = first.end;
-        // Unary test: -op word, recognized only as written.
+        // Unary test: -op word, recognized only as written. Bash rejects the operator without an
+        // operand, so keep the operator and report the missing word instead of demoting it to a string.
         if (first.keywordEligible && UNARY_TEST_OPS[val] === 1) {
-            const nt = this.tok.peek(LexContext.TestMode).token;
-            if (nt === Token.Word) {
+            if (this.tok.peek(LexContext.TestMode).token === Token.Word) {
                 const operand = this.readWord(LexContext.TestMode);
                 return {
                     type: "TestUnary",
@@ -1122,6 +1127,9 @@ class Parser {
                     operand,
                 };
             }
+            this.error("expected operand after unary test operator", firstEnd);
+            const operand = new WordImpl("", firstEnd, firstEnd, this.source, undefined, this.depth);
+            return { type: "TestUnary", pos: firstPos, end: firstEnd, operator: val, operand };
         }
         // Check for binary op
         const nt = this.tok.peek(LexContext.TestMode);

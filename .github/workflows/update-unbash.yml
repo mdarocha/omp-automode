@@ -40,14 +40,20 @@ jobs:
         id: versions
         run: |
           current=$(node --print "require('./package.json').devDependencies.unbash")
-          latest=$(npm view unbash version)
+          major=${current%%.*}
+          # A new major changes the AST, so it needs a code port, not an automatic bump.
+          latest=$(npm view "unbash@^$major" version --json | node --print "const v = JSON.parse(require('fs').readFileSync(0, 'utf8')); [].concat(v).at(-1)")
+          newest=$(npm view unbash version)
           if ! [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Unexpected unbash version from npm: $latest"
             exit 1
           fi
+          if [ "${newest%%.*}" != "$major" ]; then
+            echo "::notice::unbash $newest is a new major version; port the AST code by hand"
+          fi
           echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
-          echo "Pinned $current, latest $latest"
+          echo "Pinned $current, latest $latest within major $major"
 
       - name: Update and re-vendor
         if: steps.versions.outputs.current != steps.versions.outputs.latest

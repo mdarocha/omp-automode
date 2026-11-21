@@ -37,8 +37,8 @@ function stmt(s, indent) {
         out += " &";
     return heredocQueue.length === queued ? out : flushHeredocs(out, queued);
 }
-// Bash reads a heredoc body from the line after its `<<`. `redir` marks where it printed and
-// this drains each mark at the end of its own line, so reflowing cannot misplace a body.
+// Heredoc marks identify the line after which to emit queued bodies. Prefix redirects defer
+// their marks past multiline command words, so each body follows the complete header.
 const HEREDOC_MARK = "\u0000";
 const heredocQueue = [];
 function flushHeredocs(text, queued) {
@@ -76,7 +76,8 @@ function delimName(r) {
 }
 function heredocBody(r) {
     const content = r.content ?? "";
-    return content + (content.length > 0 && !content.endsWith("\n") ? "\n" : "") + delimName(r);
+    const delimiter = delimName(r);
+    return content + (content.length > 0 && !content.endsWith("\n") ? "\n" : "") + delimiter + (delimiter ? "" : "\n");
 }
 function printNode(n, indent) {
     switch (n.type) {
@@ -144,16 +145,35 @@ function assign(a) {
     return out;
 }
 function cmd(c) {
+    if (c.name && c.prefix.length === 0 && c.redirects.length === 0) {
+        let out = wd(c.name);
+        for (const word of c.suffix)
+            out += " " + wd(word);
+        return out;
+    }
     const parts = [];
     for (const a of c.prefix)
         parts.push(assign(a));
-    if (c.name)
+    let redirectIndex = 0;
+    let heredocMarks = "";
+    if (c.name) {
+        while (redirectIndex < c.redirects.length && c.redirects[redirectIndex].pos < c.name.pos) {
+            const text = redir(c.redirects[redirectIndex++]);
+            if (text.endsWith(HEREDOC_MARK)) {
+                parts.push(text.slice(0, -1));
+                heredocMarks += HEREDOC_MARK;
+            }
+            else {
+                parts.push(text);
+            }
+        }
         parts.push(wd(c.name));
+    }
     for (const s of c.suffix)
         parts.push(wd(s));
-    for (const r of c.redirects)
-        parts.push(redir(r));
-    return parts.join(" ");
+    for (; redirectIndex < c.redirects.length; redirectIndex++)
+        parts.push(redir(c.redirects[redirectIndex]));
+    return parts.join(" ") + heredocMarks;
 }
 function pipe(p, indent) {
     let out = "";
@@ -161,6 +181,8 @@ function pipe(p, indent) {
         out = "time";
     if (p.negated)
         out += out ? " !" : "!";
+    else if (p.negated === false && !p.time && p.commands.length === 0)
+        out = "! !";
     if (out && p.commands.length > 0)
         out += " ";
     for (let i = 0; i < p.commands.length; i++) {
@@ -182,7 +204,7 @@ function andOr(a, indent) {
 function ifNode(n, indent, isElif) {
     const pad = "  ".repeat(indent);
     const kw = isElif ? "elif" : "if";
-    let out = kw + " " + inlineList(n.clause) + "; then\n";
+    let out = kw + " " + inlineClause(n.clause, "then") + "\n";
     out += stmts(n.then.commands, indent + 1);
     if (n.else) {
         out += "\n";
@@ -215,7 +237,7 @@ function forNode(n, indent) {
 }
 function whileNode(n, indent) {
     const pad = "  ".repeat(indent);
-    let out = n.kind + " " + inlineList(n.clause) + "; do\n";
+    let out = n.kind + " " + inlineClause(n.clause, "do") + "\n";
     out += stmts(n.body.commands, indent + 1) + "\n";
     out += pad + "done";
     return out;
@@ -226,7 +248,9 @@ function caseNode(n, indent) {
     const bPad = "  ".repeat(indent + 2);
     let out = "case " + wd(n.word) + " in\n";
     for (const item of n.items) {
-        out += iPad + item.pattern.map((p) => wd(p)).join(" | ") + ")\n";
+        // A leading `esac` closes the case unless the optional `(` precedes the pattern list.
+        const open = item.pattern.length > 0 && wd(item.pattern[0]) === "esac" ? "(" : "";
+        out += iPad + open + item.pattern.map((p) => wd(p)).join(" | ") + ")\n";
         if (item.body.commands.length > 0) {
             out += stmts(item.body.commands, indent + 2) + "\n";
         }
@@ -277,7 +301,7 @@ function testCmd(n) {
 function testExpr(e) {
     switch (e.type) {
         case "TestUnary":
-            return e.operator + " " + wd(e.operand);
+            return e.operand.text === "" ? e.operator : e.operator + " " + wd(e.operand);
         case "TestBinary":
             return wd(e.left) + " " + e.operator + " " + wd(e.right);
         case "TestLogical":
@@ -470,10 +494,15 @@ function inlineList(cl) {
     let out = "";
     for (let i = 0; i < cl.commands.length; i++) {
         if (i > 0)
-            out += "; ";
+            out += cl.commands[i - 1].background ? " " : "; ";
         out += inlineStmt(cl.commands[i]);
     }
     return out;
+}
+// A background statement is already terminated by its `&`; `&;` is a syntax error.
+function inlineClause(cl, keyword) {
+    const last = cl.commands[cl.commands.length - 1];
+    return inlineList(cl) + (last?.background ? " " : "; ") + keyword;
 }
 function inlineStmt(s) {
     let out = printNode(s.command, 0);
