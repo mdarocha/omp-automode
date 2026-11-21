@@ -1427,7 +1427,8 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       async execute(_toolCallId, params, signal, _onUpdate, ctx) {
         if (signal?.aborted) throw new Error("Auto-mode inspection cancelled");
         const result = inspectAutomode(
-          params.action,
+          // Pi validates the enum; its pi-schema `StringEnum` is opaque to TypeBox inference.
+          params.action as InspectionAction,
           ctx,
           await classifierLabel(ctx),
         );
