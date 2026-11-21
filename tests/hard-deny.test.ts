@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -19,6 +20,19 @@ test("deterministic hard deny catches safety-control edits", () => {
 		deterministicHardDeny("bash", { command: "echo test >> ~/.zshrc" }, cwd) ?? "",
 		/shell profile/,
 	);
+});
+
+test("safety-control denials point to the read tools only for commands that can just read", () => {
+	const config = join(os.homedir(), ".pi/agent/extensions/pi-automode/config.json");
+	assert.match(
+		deterministicHardDeny("bash", { command: `sed -n 1,20p ${config}` }, "/tmp/project") ?? "",
+		/safety-control.*use the read or grep tool/,
+	);
+	for (const command of [`echo {} | tee ${config}`, `rm ${config}`, `truncate -s 0 ${config}`]) {
+		const reason = deterministicHardDeny("bash", { command }, "/tmp/project") ?? "";
+		assert.match(reason, /safety-control/, command);
+		assert.doesNotMatch(reason, /read or grep/, command);
+	}
 });
 
 test("deterministic hard deny protects global Pi extensions and settings", () => {
@@ -101,6 +115,73 @@ test("shell parsing catches risky suffixes, redirects, and quoted HOME targets",
 		deterministicHardDeny("bash", { command: "echo nope | tee .pi/automode.local.json" }, "/tmp/project") ?? "",
 		/safety-control/,
 	);
+});
+
+test("automode-named files below a .omp or .pi ancestor are not project config", () => {
+	// Recorded false positive: worktrees live under ~/.omp/wt.
+	const worktree = join(os.homedir(), ".omp/wt/automode-compat-b9de03f");
+	for (const command of [
+		"sed -n 198,212p docs/automode-classifier-flow.md",
+		"sed -i s/a/b/ docs/automode-classifier-flow.md",
+		"cp /tmp/x .pi/sub/automode.json",
+	]) {
+		assert.equal(deterministicHardDeny("bash", { command }, worktree), undefined, command);
+	}
+	for (const path of [
+		".omp/automode.json",
+		".pi/automode.local.json",
+		"sub/.omp/automode.json.bak",
+		join(os.homedir(), ".pi/agent/automode.json"),
+	]) {
+		assert.match(
+			deterministicHardDeny("write", { path }, worktree) ?? "",
+			/safety-control/,
+			path,
+		);
+	}
+});
+
+test("project config reached through a symlink stays a safety control", (t) => {
+	const project = mkdtempSync(join(os.tmpdir(), "pi-automode-config-link-"));
+	t.after(() => rmSync(project, { recursive: true, force: true }));
+	mkdirSync(join(project, ".omp/profiles/strict"), { recursive: true });
+	symlinkSync("profiles/strict/automode.json", join(project, ".omp/automode.json"));
+	mkdirSync(join(project, "store/.pi/projects/proj"), { recursive: true });
+	symlinkSync(join(project, "store/.pi/projects/proj"), join(project, ".pi"), "dir");
+
+	for (const path of [".omp/automode.json", ".omp/profiles/strict/automode.json", ".pi/automode.local.json"]) {
+		assert.match(deterministicHardDeny("write", { path }, project) ?? "", /safety-control/, path);
+	}
+	for (const command of ["echo {} > .omp/automode.json", "echo {} > .pi/automode.local.json"]) {
+		assert.match(deterministicHardDeny("bash", { command }, project) ?? "", /safety-control/, command);
+	}
+});
+
+test("the legacy Pi global config stays a safety control under a symlinked HOME", (t) => {
+	const root = mkdtempSync(join(os.tmpdir(), "pi-automode-home-link-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	mkdirSync(join(root, "real/.pi/agent"), { recursive: true });
+	symlinkSync(join(root, "real"), join(root, "home"), "dir");
+	const home = join(root, "home");
+	const script = `
+		import { deterministicHardDeny } from "./extensions/auto-mode.ts";
+		const legacy = process.env.HOME + "/.pi/agent/automode.json";
+		const reasons = [
+			deterministicHardDeny("write", { path: legacy }, "/tmp/project"),
+			deterministicHardDeny("bash", { command: "cp /tmp/x " + legacy }, "/tmp/project"),
+			deterministicHardDeny("bash", { command: "echo {} > " + legacy }, "/tmp/project"),
+		];
+		console.log(JSON.stringify(reasons));
+	`;
+	const child = spawnSync(
+		process.execPath,
+		["--import", "tsx", "--input-type=module", "--eval", script],
+		{ cwd: process.cwd(), env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: "utf8" },
+	);
+	assert.equal(child.status, 0, child.stderr);
+	for (const reason of JSON.parse(child.stdout.trim().split("\n").at(-1) ?? "[]")) {
+		assert.match(reason ?? "", /safety-control/);
+	}
 });
 
 test("AST hard-deny checks inspect nested and background commands", () => {

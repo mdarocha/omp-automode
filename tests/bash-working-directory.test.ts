@@ -142,8 +142,33 @@ test("commands after an unresolved directory change stay hard-denied", () => {
 		"cd \"$TARGET\"; true; false || rm -rf relative-target",
 		// An absolute cd cannot restore a directory that may never have changed.
 		"cd \"$TARGET\"; cd /tmp; rm -rf relative-target",
+		// HOME=/CDPATH= reaching the current shell or code it runs.
+		"HOME=/; cd; rm -rf relative-target",
+		"export HOME=/; cd; rm -rf relative-target",
+		"HOME=/ eval cd; rm -rf relative-target",
+		"HOME=/ bash -c 'cd; rm -rf relative-target'",
+		"HOME=/ source ./env.sh; rm -rf relative-target",
+		"f() { cd; }; HOME=/ f; rm -rf relative-target",
+		"CDPATH=/ . ./env.sh; rm -rf relative-target",
+		"let HOME=0; cd; rm -rf relative-target",
+		// Later prefix words expand with the earlier assignment in effect.
+		"HOME=/ X=$(cd; rm -rf relative-target) git status",
+		"HOME=/ X=`cd; rm -rf relative-target` git status",
+		"HOME=/ X=${U:-$(cd; rm -rf relative-target)} git status",
 	]) {
 		assert.match(hardDeny(command) ?? "", UNRESOLVED, command);
+	}
+});
+
+test("HOME= and CDPATH= prefixes on an external command keep the directory known", () => {
+	for (const command of [
+		// Recorded false positive.
+		"HOME=/tmp/omphome omp config list --json >cfg-new.json; jq -r 'keys[]' cfg-old.json | sort >ko",
+		"env HOME=/tmp/omphome omp config list; printf x > relative-out",
+		"CDPATH=/ make build; rm -rf relative-target",
+		"HOME=/tmp/x PWD=/ git status; chmod 600 relative-file",
+	]) {
+		assert.equal(hardDeny(command), undefined, command);
 	}
 });
 
@@ -319,4 +344,18 @@ test("the hook lets commands past hard-deny when only a later directory change i
 	assert.equal(blocked?.block, true);
 	assert.match(blocked?.reason ?? "", /unresolved directory change/);
 	assert.equal(harness.classifierCalls, 0);
+});
+
+test("unresolved-directory denials name a rewrite that passes the hard-deny", () => {
+	const out = join(projectDirectory, "build");
+	for (const [command, hint, rewrite] of [
+		["cd \"$TARGET\"; printf x > relative-out", /use absolute paths/, `cd "$TARGET"; printf x > ${out}/out`],
+		["cd \"$TARGET\"; rm -rf relative-target", /use absolute paths/, `cd "$TARGET"; rm -rf ${out}`],
+		["cd \"$TARGET\"; find build -delete", /use absolute paths/, `cd "$TARGET"; find ${out} -delete`],
+		["cd \"$TARGET\"; rm -rf build", /give cd a literal absolute directory/, `cd ${projectDirectory}; rm -rf build`],
+		["cd \"$TARGET\"; chmod 600 relative-file", /give cd a literal absolute directory/, `cd ${projectDirectory}; chmod 600 relative-file`],
+	] as const) {
+		assert.match(hardDeny(command) ?? "", hint, command);
+		assert.equal(hardDeny(rewrite), undefined, rewrite);
+	}
 });

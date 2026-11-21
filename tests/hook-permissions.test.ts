@@ -251,6 +251,7 @@ test("before_agent_start adds blocked-action guidance when auto mode is enabled"
 	assert.match(result.systemPrompt ?? "", /equivalent workaround/i);
 	assert.match(result.systemPrompt ?? "", /report the block.*before continuing with dependent work/i);
 	assert.match(result.systemPrompt ?? "", /independent work can continue/i);
+	assert.match(result.systemPrompt ?? "", /unresolved directory change.*absolute paths/i);
 });
 
 test("before_agent_start omits blocked-action guidance when auto mode is disabled", async () => {
@@ -899,9 +900,23 @@ test("tool_call blocks pathname-expanded executables before broad Bash allows an
 			input: { command },
 		}, harness.ctx) as { block?: boolean; reason?: string } | undefined;
 		assert.equal(result?.block, true, command);
-		assert.match(result?.reason ?? "", /executable.*pathname expansion/i, command);
+		assert.match(result?.reason ?? "", /executable.*pathname expansion.*name the executable literally/i, command);
+		assert.match(result?.reason ?? "", /other than a known rewrite/, command);
 	}
 	assert.equal(harness.classifierCalls, 0);
+});
+
+test("only hard-deny blocks offer the known-rewrite exception", async () => {
+	const harness = await setupHookTest({
+		classifier: async () => ({ decision: "block", tier: "soft_deny", reason: "classifier denial" }),
+	});
+	const result = await harness.emit("tool_call", {
+		toolName: "bash",
+		input: { command: "git push --force origin main" },
+	}, harness.ctx) as { block?: boolean; reason?: string } | undefined;
+	assert.equal(result?.block, true);
+	assert.match(result?.reason ?? "", /equivalent workaround\./);
+	assert.doesNotMatch(result?.reason ?? "", /known rewrite/);
 });
 
 test("tool_call blocks decoded NUL words before broad Bash allows and classifier", async () => {

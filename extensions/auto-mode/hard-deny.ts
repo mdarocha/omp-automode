@@ -280,16 +280,51 @@ function resolveTokenPath(
   };
 }
 
+const DIRECTORY_VARIABLE_ASSIGNMENT = /^(HOME|CDPATH|PWD|OLDPWD)=/;
+/** Command or process substitution, which runs in the current shell's environment. */
+const SUBSTITUTION = /\$\(|`|[<>]\(/;
+
+/**
+ * Commands that run in the current shell or in a script the analysis replays.
+ * A `HOME=`-style prefix on one of them can change where a later `cd` lands;
+ * POSIX special builtins keep prefix assignments in `sh`.
+ */
+const SHELL_SCOPE_COMMANDS: Record<string, true> = {
+  ":": true, ".": true, source: true, eval: true, exec: true, exit: true,
+  return: true, break: true, continue: true, export: true, readonly: true,
+  declare: true, typeset: true, local: true, set: true, unset: true,
+  shift: true, times: true, trap: true, let: true, cd: true, pushd: true, popd: true,
+  bash: true, sh: true,
+};
+
+/** Whether `segment` can change HOME/CDPATH/PWD/OLDPWD for later commands. */
+function changesDirectoryVariables(
+  segment: BashCommandAnalysis,
+  definesFunctions: boolean,
+): boolean {
+  if (!segment.words.some((word) => DIRECTORY_VARIABLE_ASSIGNMENT.test(word))) {
+    return false;
+  }
+  const name = segment.effectiveCommand.name;
+  // A prefix or `env` assignment on an external program reaches only that process.
+  // Later prefix words expand with it in effect, so `HOME=/ X=$(cd; …) tool` runs that `cd` in `/`.
+  return !segment.name || !name || definesFunctions ||
+    segment.words.some((word) => SUBSTITUTION.test(word)) ||
+    Object.hasOwn(SHELL_SCOPE_COMMANDS, segment.name) ||
+    Object.hasOwn(SHELL_SCOPE_COMMANDS, name);
+}
+
 /** Directories after `segment` runs, or `undefined` when they become unknown. */
 function advanceWorkingDirectories(
   directories: ReadonlySet<string>,
   segment: BashCommandAnalysis,
+  definesFunctions: boolean,
 ): WorkingDirectories {
   const command = segment.effectiveCommand;
   const name = command.name;
   if (
     segment.dynamicName || command.unresolvedTransparentDispatch ||
-    segment.words.some((word) => /^(HOME|CDPATH|PWD|OLDPWD)=/.test(word)) ||
+    changesDirectoryVariables(segment, definesFunctions) ||
     name === "pushd" || name === "popd" || name === "." || name === "source" ||
     (name === "eval" && segment.dynamicShellScript)
   ) {
@@ -343,10 +378,15 @@ function traceBashWorkingDirectories(
   cwd: string,
 ): WorkingDirectoryTrace {
   const before: WorkingDirectories[] = [];
+  // Any call may be to a function, which runs in the current shell.
+  const definesFunctions = analysis.structure.some((token) =>
+    token.startsWith("node:Function")
+  );
   let current: WorkingDirectories = new Set([cwd]);
   for (const segment of analysis.commands) {
     before.push(current);
-    current = current && advanceWorkingDirectories(current, segment);
+    current = current &&
+      advanceWorkingDirectories(current, segment, definesFunctions);
   }
   return {
     before: before.map((directories, index) =>
@@ -368,6 +408,10 @@ function firstDirectoryHardDeny(
   return undefined;
 }
 
+// Replacing a dynamic `cd` target with its literal absolute directory keeps the command's meaning.
+const ABSOLUTE_CD_HINT = "give cd a literal absolute directory";
+const UNRESOLVED_DIRECTORY_HINT = `use absolute paths, or ${ABSOLUTE_CD_HINT}`;
+
 const SAFETY_CONTROL_REASON =
   "auto-mode or permission safety-control modification is hard-denied";
 
@@ -378,7 +422,7 @@ function redirectHardDeny(
 ): string | undefined {
   const resolved = resolveTokenPath(target, cwd);
   if (resolved.unresolved) {
-    return "relative Bash redirect after an unresolved directory change is hard-denied";
+    return `relative Bash redirect after an unresolved directory change is hard-denied; ${UNRESOLVED_DIRECTORY_HINT}`;
   }
   const path = resolved.path;
   if (!path) return undefined;
@@ -398,6 +442,18 @@ const SAFETY_CONTROL_WRITERS: Record<string, true> = {
   rm: true,
   unlink: true,
   truncate: true,
+  python: true,
+  python3: true,
+  node: true,
+  perl: true,
+  ruby: true,
+  sd: true,
+  sed: true,
+};
+
+/** Writers that can also just read a control, such as `sed -n` or `cp` from it. */
+const SAFETY_CONTROL_READERS: Record<string, true> = {
+  cp: true,
   python: true,
   python3: true,
   node: true,
@@ -540,7 +596,7 @@ function segmentHardDeny(
         }
         const resolved = resolveTokenPath(arg, cwd, shellText);
         if (resolved.unresolved) {
-          return "relative recursive deletion after an unresolved directory change is hard-denied";
+          return `relative recursive deletion after an unresolved directory change is hard-denied; ${UNRESOLVED_DIRECTORY_HINT}`;
         }
         const path = resolved.path;
         const policyPath = path ? (resolvePathForPolicy(path) ?? path) : undefined;
@@ -557,7 +613,7 @@ function segmentHardDeny(
     while (["-H", "-L", "-P"].includes(args[rootIndex] ?? "")) rootIndex++;
     const resolvedRoot = resolveTokenPath(args[rootIndex] ?? "", cwd);
     if (resolvedRoot.unresolved) {
-      return "relative find deletion after an unresolved directory change is hard-denied";
+      return `relative find deletion after an unresolved directory change is hard-denied; ${UNRESOLVED_DIRECTORY_HINT}`;
     }
     const root = resolvedRoot.path;
     const policyRoot = root ? (resolvePathForPolicy(root) ?? root) : undefined;
@@ -575,7 +631,8 @@ function segmentHardDeny(
     for (const arg of args.filter((arg) => !arg.startsWith("-"))) {
       const resolved = resolveTokenPath(arg, cwd);
       if (resolved.unresolved) {
-        return "relative permission mutation after an unresolved directory change is hard-denied";
+        // The mode or owner operand is not a path, so absolute file paths alone cannot pass.
+        return `relative permission mutation after an unresolved directory change is hard-denied; ${ABSOLUTE_CD_HINT}`;
       }
       const path = resolved.path;
       if (
@@ -596,7 +653,10 @@ function segmentHardDeny(
     Object.hasOwn(SAFETY_CONTROL_WRITERS, name) &&
     touchesSafetyControl(segment, cwd, policyCwd)
   ) {
-    return SAFETY_CONTROL_REASON;
+    // `sed -n`, `cp` from, or `python3 -c` reads also land here.
+    return Object.hasOwn(SAFETY_CONTROL_READERS, name)
+      ? `${SAFETY_CONTROL_REASON}; if the command only reads, use the read or grep tool`
+      : SAFETY_CONTROL_REASON;
   }
 
   return undefined;

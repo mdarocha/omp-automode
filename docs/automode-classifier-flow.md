@@ -519,9 +519,11 @@ The result states that the tool did not run and preserves the denial reason. The
 
 - report the block to the user before work that depends on the blocked action continues
 - not claim success or rely on effects from the blocked action
-- not try an equivalent workaround
+- not try an equivalent workaround, except a known rewrite listed in the guidance after a deterministic hard-deny block
 
-Independent work can continue. Interactive approval stays limited to configured `permissions.ask` rules. Classifier and deterministic denials stay final.
+The guidance lists known rewrites for deterministic false positives, and the block message mentions the exception only for deterministic hard-deny blocks. A rewrite runs through every check again. For example, after an unresolved directory change the agent may retry once with absolute paths. The hard-deny checks resolve them and still block an auto-mode control, a shell profile, SSH `authorized_keys`, or a root, home, or system path; other targets, such as `.git` files, go to the classifier.
+
+Independent work can continue. Interactive approval stays limited to configured `permissions.ask` rules. Classifier denials stay final, and so do deterministic denials apart from the listed rewrites.
 
 These instructions decrease ambiguity in the model context. They do not guarantee that each model will follow the instructions.
 

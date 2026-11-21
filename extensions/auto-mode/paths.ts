@@ -33,7 +33,8 @@ import {
 } from "./constants.ts";
 import type { ActiveControls } from "./types.ts";
 
-const PROJECT_CONFIG_DIR = /\/\.(?:pi|omp)\//;
+/** A file directly inside a `.pi` or `.omp` directory; deeper paths such as `~/.omp/wt/<checkout>/…` are not project config. */
+const PROJECT_CONFIG_DIR = /\/\.(?:pi|omp)\/[^/]+$/;
 const PROJECT_CONFIG_EXTENSIONS_DIR = /\/\.(?:pi|omp)\/extensions\//;
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
@@ -375,13 +376,22 @@ function isUnderRoot(normalized: string, root: string): boolean {
 }
 
 function isGlobalSafetyControlPath(normalized: string): boolean {
-  const piAgentRoot = normalizeProtectedPathForMatch(PI_AGENT_DIR);
-  if (
-    normalized === `${piAgentRoot}/settings.json` ||
-    isUnderRoot(normalized, `${piAgentRoot}/extensions`) ||
-    isUnderRoot(normalized, `${piAgentRoot}/settings`)
-  ) {
-    return true;
+  // Policy paths are symlink-resolved, so match the resolved Pi agent dir as well.
+  const piAgentRoots = new Set(
+    [PI_AGENT_DIR, resolvePathForPolicy(PI_AGENT_DIR) ?? PI_AGENT_DIR]
+      .map(normalizeProtectedPathForMatch),
+  );
+  for (const piAgentRoot of piAgentRoots) {
+    if (
+      normalized === `${piAgentRoot}/settings.json` ||
+      // Legacy global config (`automode.json`), migrated into effect on startup.
+      (dirname(normalized) === piAgentRoot &&
+        basename(normalized).startsWith("automode")) ||
+      isUnderRoot(normalized, `${piAgentRoot}/extensions`) ||
+      isUnderRoot(normalized, `${piAgentRoot}/settings`)
+    ) {
+      return true;
+    }
   }
   const ompAgentRoots = new Set([
     normalizeProtectedPathForMatch(OMP_DEFAULT_AGENT_DIR),
@@ -457,6 +467,15 @@ export function isSafetyControlPath(path: string, cwd: string): boolean {
   }
   if (PROJECT_CONFIG_DIR.test(normalized) && file.startsWith("automode")) {
     return true;
+  }
+  // A loaded project config can be a symlink to a file deeper below `.pi`/`.omp` or elsewhere.
+  for (const dir of [OMP_PROJECT_DIR, PI_PROJECT_DIR]) {
+    for (const name of [PROJECT_LOCAL_SETTINGS_FILE, PROJECT_SHARED_SETTINGS_FILE]) {
+      const loaded = resolve(cwd, dir, name);
+      if (normalizeProtectedPathForMatch(resolvePathForPolicy(loaded) ?? loaded) === normalized) {
+        return true;
+      }
+    }
   }
   if (isUnderLoadedExtension(normalized)) return true;
   // Install-directory name. A clone or worktree named like the extension is not one.
