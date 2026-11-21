@@ -1,0 +1,91 @@
+name: Update unbash
+
+# The shell parser is vendored into extensions/vendor/unbash, so Dependabot
+# cannot update it. This job bumps the pin, re-vendors it, and opens one PR.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  # Dispatches CI on the PR branch; PRs opened with GITHUB_TOKEN do not trigger it.
+  actions: write
+
+concurrency:
+  group: update-unbash
+  cancel-in-progress: false
+
+env:
+  BRANCH: deps/unbash
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Compare pinned and latest versions
+        id: versions
+        run: |
+          current=$(node --print "require('./package.json').devDependencies.unbash")
+          latest=$(npm view unbash version)
+          if ! [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unexpected unbash version from npm: $latest"
+            exit 1
+          fi
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "Pinned $current, latest $latest"
+
+      - name: Update and re-vendor
+        if: steps.versions.outputs.current != steps.versions.outputs.latest
+        env:
+          LATEST: ${{ steps.versions.outputs.latest }}
+        run: |
+          npm install --save-dev --save-exact "unbash@$LATEST"
+          npm run vendor:unbash
+
+      - name: Open or update the pull request
+        if: steps.versions.outputs.current != steps.versions.outputs.latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT: ${{ steps.versions.outputs.current }}
+          LATEST: ${{ steps.versions.outputs.latest }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create "$BRANCH"
+          git add package.json package-lock.json extensions/vendor/unbash
+          git commit --message "deps: update vendored unbash to $LATEST"
+          git push --force origin "$BRANCH"
+
+          title="deps: update vendored unbash from $CURRENT to $LATEST"
+          body=$(cat <<EOF
+          Updates the pinned \`unbash\` from $CURRENT to $LATEST and refreshes \`extensions/vendor/unbash\` with \`npm run vendor:unbash\`.
+
+          \`unbash\` parses every Bash command for permission matching and the deterministic hard-deny checks, so a parser change can change what gets blocked. Read the [unbash releases](https://github.com/webpro-nl/unbash/releases) before merging, and expect a major version to need code changes in \`extensions/auto-mode/bash.ts\`.
+
+          Opened by the weekly \`update-unbash\` workflow. A newer release force-pushes this branch and updates this PR.
+          EOF
+          )
+
+          existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body "$body"
+          else
+            gh pr create --base main --head "$BRANCH" --title "$title" --body "$body"
+          fi
+
+          gh workflow run ci.yml --ref "$BRANCH"

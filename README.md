@@ -274,7 +274,9 @@ npm test
 npm pack --dry-run
 ```
 
-Bash permission and hard-deny checks use `unbash` 4.0.10, included under `extensions/vendor/unbash` with Lars Kappert's ISC license. To upgrade it, update the exact `devDependencies.unbash` version, run `npm install`, then run `npm run vendor:unbash` and commit the refreshed distribution with its lockfile. Verify a dependency-free installation with `node --import tsx --test --test-name-pattern='marketplace copy' tests/*.test.ts`.
+Bash permission and hard-deny checks use `unbash` at the exact version pinned in `devDependencies.unbash`, included under `extensions/vendor/unbash` with Lars Kappert's ISC license. To upgrade it, update that version, run `npm install`, then run `npm run vendor:unbash` and commit the refreshed distribution with its lockfile. Verify a dependency-free installation with `node --import tsx --test --test-name-pattern='marketplace copy' tests/*.test.ts`.
+
+Dependencies update automatically. Dependabot opens weekly PRs for npm packages and GitHub Actions. It skips `unbash`, which the weekly `update-unbash` workflow handles instead: it re-vendors the new release onto the `deps/unbash` branch, opens or updates one PR, and starts CI on it. CI fails when the vendored copy does not match the pinned version.
 
 `extensions/auto-mode/session-tree.ts` owns live session registration, parent linkage, and shared toggles. Extension lifecycle hooks explicitly register and unregister each instance; transcript assembly receives evidence snapshots, not parent contexts. `state.ts` owns persisted counters, denial history, and status formatting.
 
