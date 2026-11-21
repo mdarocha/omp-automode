@@ -1,3 +1,5 @@
+import { ScriptExpansionImpl } from "./expansion.js";
+import { MAX_SYNTAX_NESTING } from "./limits.js";
 import { CH_TAB, CH_NL, CH_SPACE, CH_BANG, CH_DOLLAR, CH_PERCENT, CH_AMP, CH_LPAREN, CH_RPAREN, CH_STAR, CH_PLUS, CH_COMMA, CH_DASH, CH_SLASH, CH_0, CH_9, CH_COLON, CH_LT, CH_EQ, CH_GT, CH_QUESTION, CH_A, CH_Z, CH_LBRACKET, CH_RBRACKET, CH_CARET, CH_UNDERSCORE, CH_a, CH_z, CH_LBRACE, CH_RBRACE, CH_PIPE, CH_TILDE, } from "./chars.js";
 function opPrec(op) {
     switch (op) {
@@ -45,9 +47,20 @@ function opPrec(op) {
             return 13;
         case "**":
             return 14;
+        case "?":
+            return 3;
         default:
             return -1;
     }
+}
+function trimEnd(src, start, end) {
+    while (end > start) {
+        const c = src.charCodeAt(end - 1);
+        if (c !== CH_SPACE && c !== CH_TAB && c !== CH_NL)
+            break;
+        end--;
+    }
+    return end;
 }
 function opRightAssoc(op) {
     switch (op) {
@@ -68,10 +81,9 @@ function opRightAssoc(op) {
             return false;
     }
 }
-export function parseArithmeticExpression(src, offset = 0, collector) {
+export function parseArithmeticExpression(src, offset = 0, collector, nestingDepth = 0) {
     let pos = 0;
     const len = src.length;
-    const initialCommandCount = collector?.commandExpansions.length ?? 0;
     const initialWordCount = collector?.embeddedWords.length ?? 0;
     function makeWord(start, end, embedded = false) {
         const node = {
@@ -226,8 +238,73 @@ export function parseArithmeticExpression(src, offset = 0, collector) {
                 return null;
         }
     }
-    function parseBinExpr(minPrec) {
-        let left = parseUnaryExpr();
+    function skipTruncatedUnary() {
+        skipWS();
+        while (pos < len) {
+            const c = src.charCodeAt(pos);
+            if (c !== CH_BANG && c !== CH_TILDE && c !== CH_PLUS && c !== CH_DASH)
+                break;
+            if (src.charCodeAt(pos + 1) === CH_EQ)
+                break;
+            pos++;
+            skipWS();
+        }
+        if (src.charCodeAt(pos) === CH_LPAREN) {
+            let groups = 1;
+            pos++;
+            while (pos < len && groups > 0) {
+                const wordEnd = collector?.findArithmeticWordEnd?.(pos + offset, offset + len) ?? pos + offset;
+                if (wordEnd > pos + offset) {
+                    pos = wordEnd - offset;
+                    continue;
+                }
+                const c = src.charCodeAt(pos++);
+                if (c === CH_LPAREN)
+                    groups++;
+                else if (c === CH_RPAREN)
+                    groups--;
+            }
+        }
+        else if (pos < len && src.charCodeAt(pos) !== CH_RPAREN && src.charCodeAt(pos) !== CH_COLON) {
+            parseAtom(0);
+        }
+        skipWS();
+        const c = src.charCodeAt(pos);
+        if ((c === CH_PLUS || c === CH_DASH) && src.charCodeAt(pos + 1) === c)
+            pos += 2;
+    }
+    function recoverExpression(minPrec) {
+        skipWS();
+        const start = pos;
+        if (start === len)
+            return makeWord(start, start);
+        const wordCount = collector?.embeddedWords.length ?? 0;
+        let ternaries = 0;
+        for (;;) {
+            skipTruncatedUnary();
+            skipWS();
+            if (src.charCodeAt(pos) === CH_COLON && ternaries > 0) {
+                ternaries--;
+                pos++;
+                continue;
+            }
+            const saved = pos;
+            const op = tryReadBinOp();
+            if (op === null || (ternaries === 0 && opPrec(op) < minPrec)) {
+                pos = saved;
+                break;
+            }
+            if (op === "?")
+                ternaries++;
+        }
+        if (collector)
+            collector.embeddedWords.length = wordCount;
+        return makeWord(start, trimEnd(src, start, pos));
+    }
+    function parseBinExpr(minPrec, depth) {
+        if (depth > MAX_SYNTAX_NESTING)
+            return recoverExpression(minPrec);
+        let left = parseUnaryExpr(depth);
         while (true) {
             skipWS();
             if (pos >= len)
@@ -238,15 +315,15 @@ export function parseArithmeticExpression(src, offset = 0, collector) {
                 break;
             // Ternary
             if (op === "?") {
-                if (3 < minPrec) {
+                if (opPrec(op) < minPrec) {
                     pos = saved;
                     break;
                 }
-                const consequent = parseBinExpr(1);
+                const consequent = parseBinExpr(1, depth + 1);
                 skipWS();
                 if (pos < len && src.charCodeAt(pos) === CH_COLON)
                     pos++;
-                const alternate = parseBinExpr(3);
+                const alternate = parseBinExpr(3, depth + 1);
                 left = { type: "ArithmeticTernary", pos: left.pos, end: alternate.end, test: left, consequent, alternate };
                 continue;
             }
@@ -256,13 +333,15 @@ export function parseArithmeticExpression(src, offset = 0, collector) {
                 break;
             }
             const nextPrec = opRightAssoc(op) ? prec : prec + 1;
-            const right = parseBinExpr(nextPrec);
+            const right = parseBinExpr(nextPrec, depth + 1);
             left = { type: "ArithmeticBinary", pos: left.pos, end: right.end, operator: op, left, right };
         }
         return left;
     }
-    function parseUnaryExpr() {
+    function parseUnaryExpr(depth) {
         skipWS();
+        if (depth > MAX_SYNTAX_NESTING)
+            return recoverExpression(15);
         if (pos >= len)
             return makeWord(pos, pos);
         const start = pos;
@@ -271,39 +350,39 @@ export function parseArithmeticExpression(src, offset = 0, collector) {
         // Prefix ++ --
         if (c === CH_PLUS && nc === CH_PLUS) {
             pos += 2;
-            const operand = parseUnaryExpr();
+            const operand = parseUnaryExpr(depth + 1);
             return { type: "ArithmeticUnary", pos: start + offset, end: operand.end, operator: "++", operand, prefix: true };
         }
         if (c === CH_DASH && nc === CH_DASH) {
             pos += 2;
-            const operand = parseUnaryExpr();
+            const operand = parseUnaryExpr(depth + 1);
             return { type: "ArithmeticUnary", pos: start + offset, end: operand.end, operator: "--", operand, prefix: true };
         }
         // Unary ! ~ + -
         if (c === CH_BANG) {
             pos++;
-            const operand = parseUnaryExpr();
+            const operand = parseUnaryExpr(depth + 1);
             return { type: "ArithmeticUnary", pos: start + offset, end: operand.end, operator: "!", operand, prefix: true };
         }
         if (c === CH_TILDE) {
             pos++;
-            const operand = parseUnaryExpr();
+            const operand = parseUnaryExpr(depth + 1);
             return { type: "ArithmeticUnary", pos: start + offset, end: operand.end, operator: "~", operand, prefix: true };
         }
         if (c === CH_PLUS && nc !== CH_PLUS && nc !== CH_EQ) {
             pos++;
-            const operand = parseUnaryExpr();
+            const operand = parseUnaryExpr(depth + 1);
             return { type: "ArithmeticUnary", pos: start + offset, end: operand.end, operator: "+", operand, prefix: true };
         }
         if (c === CH_DASH && nc !== CH_DASH && nc !== CH_EQ) {
             pos++;
-            const operand = parseUnaryExpr();
+            const operand = parseUnaryExpr(depth + 1);
             return { type: "ArithmeticUnary", pos: start + offset, end: operand.end, operator: "-", operand, prefix: true };
         }
-        return parsePostfixExpr();
+        return parsePostfixExpr(depth);
     }
-    function parsePostfixExpr() {
-        const operand = parseAtom();
+    function parsePostfixExpr(depth) {
+        const operand = parseAtom(depth);
         skipWS();
         if (pos + 1 < len) {
             const c = src.charCodeAt(pos);
@@ -319,7 +398,7 @@ export function parseArithmeticExpression(src, offset = 0, collector) {
         }
         return operand;
     }
-    function parseAtom() {
+    function parseAtom(depth) {
         skipWS();
         if (pos >= len)
             return makeWord(pos, pos);
@@ -328,7 +407,7 @@ export function parseArithmeticExpression(src, offset = 0, collector) {
         if (c === CH_LPAREN) {
             const start = pos;
             pos++;
-            const expr = parseBinExpr(0);
+            const expr = parseBinExpr(0, depth + 1);
             skipWS();
             if (pos < len && src.charCodeAt(pos) === CH_RPAREN)
                 pos++;
@@ -337,15 +416,12 @@ export function parseArithmeticExpression(src, offset = 0, collector) {
         // Dollar expansion
         if (c === CH_DOLLAR) {
             const start = pos;
-            const commandCount = collector?.commandExpansions.length ?? 0;
             const wordCount = collector?.embeddedWords.length ?? 0;
             const atom = readDollarAtom();
             const wordEnd = collector?.findArithmeticWordEnd?.(start + offset, offset + len) ?? pos + offset;
             if (wordEnd > pos + offset) {
-                if (collector) {
-                    collector.commandExpansions.length = commandCount;
+                if (collector)
                     collector.embeddedWords.length = wordCount;
-                }
                 pos = wordEnd - offset;
                 return makeWord(start, pos, true);
             }
@@ -418,17 +494,9 @@ export function parseArithmeticExpression(src, offset = 0, collector) {
                     }
                 }
                 const text = src.slice(start, pos);
-                const inner = text.slice(2, -1); // remove "$(" and ")"
-                const node = {
-                    type: "ArithmeticCommandExpansion",
-                    pos: start + offset,
-                    end: pos + offset,
-                    text,
-                    inner,
-                    script: undefined,
-                };
-                collector?.commandExpansions.push(node);
-                return node;
+                return collector
+                    ? collector.commandExpansion(start + offset, pos + offset, text)
+                    : new ScriptExpansionImpl("ArithmeticCommandExpansion", start + offset, pos + offset, text);
             }
         }
         else if (c === CH_LBRACE) {
@@ -509,13 +577,15 @@ export function parseArithmeticExpression(src, offset = 0, collector) {
     skipWS();
     if (pos >= len)
         return null;
-    const result = parseBinExpr(0);
-    // Check there's nothing important remaining
+    const start = pos;
+    const result = parseBinExpr(0, nestingDepth);
     skipWS();
-    if (pos < len && collector) {
-        collector.commandExpansions.length = initialCommandCount;
-        collector.embeddedWords.length = initialWordCount;
-        return makeWord(0, len, true);
+    if (pos < len) {
+        // Unparsed tokens remain: a partial tree would silently drop them, so keep the whole body
+        // as one word. With embedded structure its parts still expose nested substitutions.
+        if (collector)
+            collector.embeddedWords.length = initialWordCount;
+        return makeWord(start, trimEnd(src, start, len), collector !== undefined);
     }
     return result;
 }

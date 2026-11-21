@@ -12,10 +12,59 @@ function codePoint(value, fallback) {
         return fallback;
     }
 }
+// ignoreBOM keeps a leading EF BB BF as U+FEFF instead of stripping it from each run.
+const utf8 = new TextDecoder("utf-8", { ignoreBOM: true });
+// Bash writes \xHH and \NNN as raw bytes, so a run of them is decoded as UTF-8.
+// A byte outside a well-formed sequence has no character and becomes U+FFFD.
+function decodeBytes(bytes) {
+    return utf8.decode(new Uint8Array(bytes));
+}
+// Reads a \xHH or \NNN escape at pos, which Bash treats as a single byte.
+function readByteEscape(source, pos, limit) {
+    if (source.charCodeAt(pos) !== 92 || pos + 2 > limit)
+        return undefined;
+    const escaped = source.charCodeAt(pos + 1);
+    const digitsStart = pos + 2;
+    let end = digitsStart;
+    if (escaped === 120) {
+        while (end < limit && end - digitsStart < 2 && isHex(source.charCodeAt(end)))
+            end++;
+        if (end === digitsStart)
+            return undefined;
+        return { value: Number.parseInt(source.slice(digitsStart, end), 16), end };
+    }
+    if (!isOctal(escaped))
+        return undefined;
+    while (end < limit && end - digitsStart < 2 && isOctal(source.charCodeAt(end)))
+        end++;
+    return { value: Number.parseInt(source.slice(pos + 1, end), 8) & 0xff, end };
+}
 export function decodeAnsiCQuoted(source, start, limit) {
     let pos = start;
     let value = "";
+    let bytes = [];
+    // Bash ends the string at the first NUL an escape produces; scanning still runs to the closing quote.
+    let nul = -1;
     while (pos < limit && source.charCodeAt(pos) !== 39) {
+        const escapeStart = pos;
+        const byte = readByteEscape(source, pos, limit);
+        // ASCII bytes end a run like other text, so escapes such as \033 never pay for a decoder call.
+        if (byte && byte.value >= 0x80) {
+            bytes.push(byte.value);
+            pos = byte.end;
+            continue;
+        }
+        if (bytes.length > 0) {
+            value += decodeBytes(bytes);
+            bytes = [];
+        }
+        if (byte) {
+            if (byte.value === 0 && nul === -1)
+                nul = value.length;
+            value += String.fromCharCode(byte.value);
+            pos = byte.end;
+            continue;
+        }
         if (source.charCodeAt(pos) !== 92 || pos + 1 >= limit) {
             const runStart = pos;
             while (pos < limit) {
@@ -29,7 +78,7 @@ export function decodeAnsiCQuoted(source, start, limit) {
             value += source.slice(runStart, pos);
             continue;
         }
-        const escapeStart = pos++;
+        pos++;
         const escaped = source[pos++];
         switch (escaped) {
             case "a":
@@ -92,14 +141,17 @@ export function decodeAnsiCQuoted(source, start, limit) {
                     }
                     break;
                 }
-                value += String.fromCharCode(code === 63 ? 127 : code & 31);
+                const control = code === 63 ? 127 : code & 31;
+                // Bash applies \c to the operand's first UTF-8 byte, which equals the code unit only for ASCII.
+                if (control === 0 && code < 128 && nul === -1)
+                    nul = value.length;
+                value += String.fromCharCode(control);
                 break;
             }
-            case "x":
             case "u":
             case "U": {
                 const digitsStart = pos;
-                const maxDigits = escaped === "x" ? 2 : escaped === "u" ? 4 : 8;
+                const maxDigits = escaped === "u" ? 4 : 8;
                 while (pos < limit && pos - digitsStart < maxDigits && isHex(source.charCodeAt(pos)))
                     pos++;
                 if (pos === digitsStart) {
@@ -107,22 +159,21 @@ export function decodeAnsiCQuoted(source, start, limit) {
                     break;
                 }
                 const raw = source.slice(escapeStart, pos);
-                value += codePoint(Number.parseInt(source.slice(digitsStart, pos), 16), raw);
+                const point = Number.parseInt(source.slice(digitsStart, pos), 16);
+                if (point === 0 && nul === -1)
+                    nul = value.length;
+                value += codePoint(point, raw);
                 break;
             }
-            default: {
-                const escapedCode = escaped.charCodeAt(0);
-                if (!isOctal(escapedCode)) {
-                    value += `\\${escaped}`;
-                    break;
-                }
-                while (pos < limit && pos - escapeStart - 1 < 3 && isOctal(source.charCodeAt(pos)))
-                    pos++;
-                value += String.fromCharCode(Number.parseInt(source.slice(escapeStart + 1, pos), 8) & 0xff);
+            default:
+                value += `\\${escaped}`;
                 break;
-            }
         }
     }
+    if (bytes.length > 0)
+        value += decodeBytes(bytes);
+    if (nul !== -1)
+        value = value.slice(0, nul);
     const closed = pos < limit;
     if (closed)
         pos++;
