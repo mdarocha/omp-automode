@@ -82,6 +82,9 @@ import {
   type Logger,
 } from "./log.ts";
 import { loadOmpBridge } from "./omp.ts";
+import { automodeCompletions, type ModelChoice } from "./command-completions.ts";
+import { formatModelSpec, ROLE_SELECTOR_PREFIX } from "./model.ts";
+import { jevSelectorChoices } from "./model-selector.ts";
 import {
   chooseClassifierModel,
   validateClassifierSelection,
@@ -411,10 +414,35 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     // first is initialised by `ensureSession` instead.
     let sessionInit: "session-start" | "first-use" | undefined;
 
+    // Completion callbacks get no context; model suggestions use the session's registry.
+    let modelRegistry: ExtensionContext["modelRegistry"] | undefined;
+
+    async function classifierModelChoices(): Promise<ModelChoice[]> {
+      const current = effectiveConfig().classifierModel;
+      const choices: ModelChoice[] = [];
+      const bridge = await loadOmpBridge();
+      if (bridge && modelRegistry) {
+        for (const role of bridge.roleNames()) {
+          const [first] = bridge.roleChain(role, modelRegistry);
+          if (first) {
+            choices.push({ selector: `${ROLE_SELECTOR_PREFIX}${role}`, description: formatModelSpec(first) });
+          }
+        }
+      }
+      for (const selector of jevSelectorChoices(current)) {
+        choices.push({ selector, description: "TypeSafe Jev" });
+      }
+      for (const model of modelRegistry?.getAvailable() ?? []) {
+        choices.push({ selector: formatModelSpec(model) });
+      }
+      return choices;
+    }
+
     function initialiseSession(
       ctx: ExtensionContext,
       source: "session-start" | "first-use",
     ): void {
+      modelRegistry = ctx.modelRegistry;
       loadResult = loadConfigWithDiagnostics(ctx.cwd, projectIsTrusted(ctx));
       config = loadResult.config;
       configDiagnostics = loadResult.diagnostics;
@@ -1630,6 +1658,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
     pi.registerCommand("automode", {
       description:
         "Control pi-automode: status, on, off, reload, reset, defaults, config, denials, settings, model",
+      getArgumentCompletions: (prefix) => automodeCompletions(prefix, classifierModelChoices),
       handler: handleAutomodeCommand,
     });
   };

@@ -131,6 +131,8 @@ Jev evaluates typed policy questions in one request; code combines the answers w
 /automode model @smol # OMP only: use an OMP model role (and its fallbacks) as the classifier
 ```
 
+Typing `/automode ` completes the subcommands, and `/automode model ` completes OMP model roles, TypeSafe Jev selectors, and the available models.
+
 ## Agent diagnostics
 
 The package registers one model-callable, read-only tool:
