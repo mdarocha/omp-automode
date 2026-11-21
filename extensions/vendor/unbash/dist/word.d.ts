@@ -1,9 +1,8 @@
-import type { Word, WordPart } from "./types.ts";
+import type { Word, WordPart } from "./internal-types.ts";
 export type PartsResolver = (source: string, word: Word, depth: number) => WordPart[] | undefined;
 export declare class WordImpl implements Word {
     #private;
-    static _resolveWord: PartsResolver;
-    static _resolveHeredocBody: PartsResolver;
+    type: "Word";
     text: string;
     pos: number;
     end: number;
@@ -11,8 +10,8 @@ export declare class WordImpl implements Word {
     get value(): string;
     get parts(): WordPart[] | undefined;
     set parts(v: WordPart[] | undefined);
-    sourceText(): string | undefined;
     toJSON(): {
+        type: "Word";
         text: string;
         pos: number;
         end: number;
