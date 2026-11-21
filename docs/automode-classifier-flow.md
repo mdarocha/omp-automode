@@ -506,7 +506,9 @@ The result states that the tool did not run and preserves the denial reason. The
 
 - report the block to the user before work that depends on the blocked action continues
 - not claim success or rely on effects from the blocked action
-- not try an equivalent workaround
+- not try an equivalent workaround, except a known rewrite listed in the guidance
+
+The guidance lists known rewrites for deterministic false positives. Each one keeps the action fully checked. For example, after an unresolved directory change the agent may retry once with absolute paths, which the hard-deny checks resolve and still block when they hit a protected path.
 
 Independent work can continue. Interactive approval stays limited to configured `permissions.ask` rules. Classifier and deterministic denials stay final.
 

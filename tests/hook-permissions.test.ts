@@ -251,6 +251,7 @@ test("before_agent_start adds blocked-action guidance when auto mode is enabled"
 	assert.match(result.systemPrompt ?? "", /equivalent workaround/i);
 	assert.match(result.systemPrompt ?? "", /report the block.*before continuing with dependent work/i);
 	assert.match(result.systemPrompt ?? "", /independent work can continue/i);
+	assert.match(result.systemPrompt ?? "", /unresolved directory change.*absolute paths/i);
 });
 
 test("before_agent_start omits blocked-action guidance when auto mode is disabled", async () => {

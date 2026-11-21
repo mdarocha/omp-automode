@@ -594,7 +594,7 @@ export function createPiAutomode(options: PiAutomodeOptions = {}) {
       const cause = denial.kind === "classifier-unavailable"
         ? `${denial.reason.replace(TRAILING_PERIODS, "")}. This is not a policy denial: auto mode could not review the action.`
         : denial.reason;
-      return `[pi-automode] Action blocked; the tool did not run. ${cause} Do not claim success, rely on effects from this call, or attempt an equivalent workaround. Report the block to the user before continuing with dependent work. Independent work can continue.`;
+      return `[pi-automode] Action blocked; the tool did not run. ${cause} Do not claim success, rely on effects from this call, or attempt an equivalent workaround other than a known rewrite from the Auto Mode guidance. Report the block to the user before continuing with dependent work. Independent work can continue.`;
     }
 
     function block(
