@@ -81,7 +81,7 @@ Restart OMP after installation so it loads the extension module. Do not enable t
 ### Pi or local development
 
 ```bash
-pi install https://github.com/royce-mathew/omp-automode
+pi install https://github.com/mdarocha/omp-automode
 ```
 
 For a live local development link instead of a marketplace-cached copy:
