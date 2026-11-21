@@ -10,6 +10,8 @@ test("A marketplace copy validates native Jev answers without installed dependen
 	const directory = mkdtempSync(join(os.tmpdir(), "automode-jev-distribution-"));
 	try {
 		cpSync(new URL("../extensions", import.meta.url), join(directory, "extensions"), { recursive: true });
+		// The published package's `"type": "module"`; without it Node 22 loads the copy as CommonJS.
+		cpSync(new URL("../package.json", import.meta.url), join(directory, "package.json"));
 		const jevUrl = pathToFileURL(join(directory, "extensions/auto-mode/jev.ts")).href;
 		const script = `
 			import { classifyWithJev } from ${JSON.stringify(jevUrl)};
