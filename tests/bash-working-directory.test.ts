@@ -150,6 +150,11 @@ test("commands after an unresolved directory change stay hard-denied", () => {
 		"HOME=/ source ./env.sh; rm -rf relative-target",
 		"f() { cd; }; HOME=/ f; rm -rf relative-target",
 		"CDPATH=/ . ./env.sh; rm -rf relative-target",
+		"let HOME=0; cd; rm -rf relative-target",
+		// Later prefix words expand with the earlier assignment in effect.
+		"HOME=/ X=$(cd; rm -rf relative-target) git status",
+		"HOME=/ X=`cd; rm -rf relative-target` git status",
+		"HOME=/ X=${U:-$(cd; rm -rf relative-target)} git status",
 	]) {
 		assert.match(hardDeny(command) ?? "", UNRESOLVED, command);
 	}

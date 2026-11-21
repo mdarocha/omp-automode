@@ -281,6 +281,8 @@ function resolveTokenPath(
 }
 
 const DIRECTORY_VARIABLE_ASSIGNMENT = /^(HOME|CDPATH|PWD|OLDPWD)=/;
+/** Command or process substitution, which runs in the current shell's environment. */
+const SUBSTITUTION = /\$\(|`|[<>]\(/;
 
 /**
  * Commands that run in the current shell or in a script the analysis replays.
@@ -291,7 +293,7 @@ const SHELL_SCOPE_COMMANDS: Record<string, true> = {
   ":": true, ".": true, source: true, eval: true, exec: true, exit: true,
   return: true, break: true, continue: true, export: true, readonly: true,
   declare: true, typeset: true, local: true, set: true, unset: true,
-  shift: true, times: true, trap: true, cd: true, pushd: true, popd: true,
+  shift: true, times: true, trap: true, let: true, cd: true, pushd: true, popd: true,
   bash: true, sh: true,
 };
 
@@ -305,7 +307,9 @@ function changesDirectoryVariables(
   }
   const name = segment.effectiveCommand.name;
   // A prefix or `env` assignment on an external program reaches only that process.
+  // Later prefix words expand with it in effect, so `HOME=/ X=$(cd; …) tool` runs that `cd` in `/`.
   return !segment.name || !name || definesFunctions ||
+    segment.words.some((word) => SUBSTITUTION.test(word)) ||
     Object.hasOwn(SHELL_SCOPE_COMMANDS, segment.name) ||
     Object.hasOwn(SHELL_SCOPE_COMMANDS, name);
 }
