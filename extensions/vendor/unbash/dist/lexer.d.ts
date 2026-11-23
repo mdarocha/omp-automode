@@ -140,6 +140,7 @@ export declare class Lexer {
     unshift(tok: TokenValue): void;
     private readNext;
     private tryReadOperator;
+    private readHereOperator;
     private readRedirection;
     private readRedirectTarget;
     private readRedirectTargetText;
