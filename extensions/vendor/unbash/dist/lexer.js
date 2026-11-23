@@ -1571,17 +1571,22 @@ export class Lexer {
         const src = this.src;
         const len = this.srcEnd;
         let pos = this.pos;
+        let ch = 0;
         while (true) {
             pos = skipBlanks(src, pos, len);
-            if (ctx === LexContext.TestMode) {
-                while (pos < len && src.charCodeAt(pos) === CH_NL)
-                    pos = skipBlanks(src, pos + 1, len);
+            if (pos >= len)
+                break;
+            ch = src.charCodeAt(pos);
+            if (ch === CH_NL && ctx === LexContext.TestMode) {
+                pos++;
+                continue;
             }
-            if (pos >= len || src.charCodeAt(pos) !== CH_HASH)
+            if (ch !== CH_HASH)
                 break;
             // Leave the newline for normal-mode tokenization and pending heredocs.
-            while (pos < len && src.charCodeAt(pos) !== CH_NL)
+            do
                 pos++;
+            while (pos < len && src.charCodeAt(pos) !== CH_NL);
         }
         this.pos = pos;
         if (pos >= len) {
@@ -1590,7 +1595,6 @@ export class Lexer {
             return;
         }
         const tokenStart = pos;
-        const ch = src.charCodeAt(pos);
         if (ch === CH_NL) {
             this.pos++;
             this.consumePendingHereDocs();
@@ -1617,60 +1621,9 @@ export class Lexer {
     tryReadOperator(out, ch, ctx, tokenStart) {
         const src = this.src;
         const pos = this.pos;
-        const next = pos + 1 < this.srcEnd ? src.charCodeAt(pos + 1) : 0;
         switch (ch) {
-            case CH_SEMI:
-                if (next === CH_SEMI) {
-                    if (pos + 2 < this.srcEnd && src.charCodeAt(pos + 2) === CH_AMP) {
-                        this.pos += 3;
-                        setToken(out, Token.DoubleSemiAmp, ";;&", tokenStart, this.pos);
-                        return true;
-                    }
-                    this.pos += 2;
-                    setToken(out, Token.DoubleSemi, ";;", tokenStart, this.pos);
-                    return true;
-                }
-                if (next === CH_AMP) {
-                    this.pos += 2;
-                    setToken(out, Token.SemiAmp, ";&", tokenStart, this.pos);
-                    return true;
-                }
-                this.pos++;
-                setToken(out, Token.Semi, ";", tokenStart, this.pos);
-                return true;
-            case CH_PIPE:
-                if (next === CH_PIPE) {
-                    this.pos += 2;
-                    setToken(out, Token.Or, "||", tokenStart, this.pos);
-                    return true;
-                }
-                if (next === CH_AMP) {
-                    this.pos += 2;
-                    setToken(out, Token.Pipe, "|&", tokenStart, this.pos);
-                    return true;
-                } // |& → pipe (stderr merge)
-                this.pos++;
-                setToken(out, Token.Pipe, "|", tokenStart, this.pos);
-                return true;
-            case CH_AMP:
-                if (next === CH_AMP) {
-                    this.pos += 2;
-                    setToken(out, Token.And, "&&", tokenStart, this.pos);
-                    return true;
-                }
-                if (next === CH_GT) {
-                    // &> or &>> — redirect, not background
-                    this.pos += 2;
-                    const append = this.pos < this.srcEnd && src.charCodeAt(this.pos) === CH_GT;
-                    if (append)
-                        this.pos++;
-                    return this.readRedirectTarget(out, append ? "&>>" : "&>", tokenStart);
-                }
-                this.pos++;
-                setToken(out, Token.Amp, "&", tokenStart, this.pos);
-                return true;
             case CH_LPAREN:
-                if (ctx === LexContext.CommandStart && next === CH_LPAREN) {
+                if (ctx === LexContext.CommandStart && pos + 1 < this.srcEnd && src.charCodeAt(pos + 1) === CH_LPAREN) {
                     const savedErrors = this.errors.length;
                     this.readArithmeticCommand(out, tokenStart);
                     if (!this._notArithmetic)
@@ -1687,30 +1640,91 @@ export class Lexer {
                 return true;
             case CH_LT:
             case CH_GT:
-                return this.readRedirection(out, tokenStart);
+                return this.readRedirection(out, ch, tokenStart);
+        }
+        // Control operators ignore continuations, but token spans keep physical offsets.
+        const nextPos = skipLineContinuations(src, pos + 1, this.srcEnd);
+        const next = nextPos < this.srcEnd ? src.charCodeAt(nextPos) : 0;
+        switch (ch) {
+            case CH_SEMI:
+                if (next === CH_SEMI) {
+                    const thirdPos = skipLineContinuations(src, nextPos + 1, this.srcEnd);
+                    if (thirdPos < this.srcEnd && src.charCodeAt(thirdPos) === CH_AMP) {
+                        this.pos = thirdPos + 1;
+                        setToken(out, Token.DoubleSemiAmp, ";;&", tokenStart, this.pos);
+                        return true;
+                    }
+                    this.pos = nextPos + 1;
+                    setToken(out, Token.DoubleSemi, ";;", tokenStart, this.pos);
+                    return true;
+                }
+                if (next === CH_AMP) {
+                    this.pos = nextPos + 1;
+                    setToken(out, Token.SemiAmp, ";&", tokenStart, this.pos);
+                    return true;
+                }
+                this.pos++;
+                setToken(out, Token.Semi, ";", tokenStart, this.pos);
+                return true;
+            case CH_PIPE:
+                if (next === CH_PIPE) {
+                    this.pos = nextPos + 1;
+                    setToken(out, Token.Or, "||", tokenStart, this.pos);
+                    return true;
+                }
+                if (next === CH_AMP) {
+                    this.pos = nextPos + 1;
+                    setToken(out, Token.Pipe, "|&", tokenStart, this.pos);
+                    return true;
+                } // |& → pipe (stderr merge)
+                this.pos++;
+                setToken(out, Token.Pipe, "|", tokenStart, this.pos);
+                return true;
+            case CH_AMP:
+                if (next === CH_AMP) {
+                    this.pos = nextPos + 1;
+                    setToken(out, Token.And, "&&", tokenStart, this.pos);
+                    return true;
+                }
+                if (next === CH_GT) {
+                    // &> or &>> — redirect, not background
+                    this.pos = nextPos + 1;
+                    const thirdPos = skipLineContinuations(src, this.pos, this.srcEnd);
+                    const append = thirdPos < this.srcEnd && src.charCodeAt(thirdPos) === CH_GT;
+                    if (append)
+                        this.pos = thirdPos + 1;
+                    return this.readRedirectTarget(out, append ? "&>>" : "&>", tokenStart);
+                }
+                this.pos++;
+                setToken(out, Token.Amp, "&", tokenStart, this.pos);
+                return true;
             default:
                 return false;
         }
     }
-    readRedirection(out, tokenStart) {
+    readHereOperator(secondLessThan) {
+        this.pos = secondLessThan + 1;
+        const thirdPos = skipLineContinuations(this.src, this.pos, this.srcEnd);
+        const third = thirdPos < this.srcEnd ? this.src.charCodeAt(thirdPos) : 0;
+        if (third !== CH_LT && third !== CH_DASH)
+            return "<<";
+        this.pos = thirdPos + 1;
+        return third === CH_LT ? "<<<" : "<<-";
+    }
+    readRedirection(out, ch, tokenStart) {
         const src = this.src;
-        const ch = src.charCodeAt(this.pos);
+        this.pos++;
+        const nextPos = skipLineContinuations(src, this.pos, this.srcEnd);
+        const next = nextPos < this.srcEnd ? src.charCodeAt(nextPos) : 0;
+        if (next === CH_LPAREN && nextPos === this.pos) {
+            this.readProcessSubstitution(out, ch === CH_LT ? "<" : ">", tokenStart);
+            return true;
+        }
         let op = "";
         if (ch === CH_LT) {
-            this.pos++;
-            const next = this.pos < this.srcEnd ? src.charCodeAt(this.pos) : 0;
             if (next === CH_LT) {
-                this.pos++;
-                const third = this.pos < this.srcEnd ? src.charCodeAt(this.pos) : 0;
-                if (third === CH_LT) {
-                    // <<< herestring: its target reads like any other redirect target
-                    this.pos++;
-                    op = "<<<";
-                }
-                else {
-                    const dash = third === CH_DASH;
-                    if (dash)
-                        this.pos++;
+                op = this.readHereOperator(nextPos);
+                if (op !== "<<<") {
                     this.skipSpacesAndTabs();
                     const targetPos = this.pos;
                     if (this.pos >= this.srcEnd || src.charCodeAt(this.pos) !== CH_HASH)
@@ -1719,11 +1733,11 @@ export class Lexer {
                     if (hasTarget) {
                         (this.pendingHereDocs ?? (this.pendingHereDocs = [])).push({
                             delimiter: this._hereDelim,
-                            strip: dash,
+                            strip: op === "<<-",
                             quoted: this._hereQuoted,
                         });
                     }
-                    setToken(out, Token.Redirect, dash ? "<<-" : "<<", tokenStart, this.pos);
+                    setToken(out, Token.Redirect, op, tokenStart, this.pos);
                     out.content = hasTarget ? this._hereDelim : undefined;
                     out.delimiterQuoted = hasTarget && this._hereQuoted;
                     out.targetPos = targetPos;
@@ -1731,40 +1745,30 @@ export class Lexer {
                     return true;
                 }
             }
-            else if (next === CH_LPAREN) {
-                this.readProcessSubstitution(out, "<", tokenStart);
-                return true;
-            }
             else if (next === CH_GT) {
                 op = "<>";
-                this.pos++;
+                this.pos = nextPos + 1;
             }
             else if (next === CH_AMP) {
                 op = "<&";
-                this.pos++;
+                this.pos = nextPos + 1;
             }
             else {
                 op = "<";
             }
         }
-        else if (ch === CH_GT) {
-            this.pos++;
-            const next = this.pos < this.srcEnd ? src.charCodeAt(this.pos) : 0;
-            if (next === CH_LPAREN) {
-                this.readProcessSubstitution(out, ">", tokenStart);
-                return true;
-            }
+        else {
             if (next === CH_GT) {
                 op = ">>";
-                this.pos++;
+                this.pos = nextPos + 1;
             }
             else if (next === CH_AMP) {
                 op = ">&";
-                this.pos++;
+                this.pos = nextPos + 1;
             }
             else if (next === CH_PIPE) {
                 op = ">|";
-                this.pos++;
+                this.pos = nextPos + 1;
             }
             else {
                 op = ">";
@@ -2103,7 +2107,8 @@ export class Lexer {
         let value = null;
         if (!raw && !hasExpansions && keywordEligible && (ctx === LexContext.CommandStart || ctx === LexContext.TestMode)) {
             const nextCh = wordEnd < this.srcEnd ? src.charCodeAt(wordEnd) : 0;
-            if ((!quoted && wordLen <= 16) || nextCh === CH_LT || nextCh === CH_GT) {
+            // Line continuations can make a short keyword's physical span arbitrarily long.
+            if (!quoted || nextCh === CH_LT || nextCh === CH_GT) {
                 value = this.wordValueOf(tokenStart, wordEnd);
             }
         }
@@ -2205,7 +2210,7 @@ export class Lexer {
                     const fc = src.charCodeAt(tokenStart);
                     if (fc >= CH_0 && fc <= CH_9 && isAllDigitsRange(src, tokenStart, wordEnd)) {
                         const fd = Number.parseInt(src.slice(tokenStart, wordEnd), 10);
-                        if (this.readRedirection(out, tokenStart)) {
+                        if (this.readRedirection(out, nc, tokenStart)) {
                             out.fileDescriptor = fd;
                             out.descriptorEnd = wordEnd;
                             return;
@@ -2215,7 +2220,7 @@ export class Lexer {
                         src.charCodeAt(wordEnd - 1) === CH_RBRACE &&
                         this.isRedirectVariable(tokenStart + 1, wordEnd - 1)) {
                         const varname = src.slice(tokenStart + 1, wordEnd - 1);
-                        if (this.readRedirection(out, tokenStart)) {
+                        if (this.readRedirection(out, nc, tokenStart)) {
                             out.variableName = varname;
                             out.descriptorEnd = wordEnd;
                             return;
@@ -3953,9 +3958,6 @@ export class Lexer {
                         src.charCodeAt(this.pos + 1) === CH_LBRACE))) {
                 break;
             }
-            else if (c === CH_LT && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LT) {
-                break;
-            }
             else if (c === CH_HASH && wordStart) {
                 break;
             }
@@ -3969,6 +3971,11 @@ export class Lexer {
                 break;
             }
             else {
+                if (c === CH_LT && this.pos + 1 < len) {
+                    const next = src.charCodeAt(this.pos + 1);
+                    if (next === CH_LT || next === CH_BACKSLASH)
+                        break;
+                }
                 wordStart = c < 128 && (charType[c] & 1) !== 0;
                 this.pos++;
             }
@@ -4273,24 +4280,24 @@ export class Lexer {
                     this.pos++;
                 wordStart = false;
             }
-            else if (ch === CH_LT && arithBase < 0 && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LT) {
+            else if (ch === CH_LT && arithBase < 0) {
+                const second = skipLineContinuations(src, this.pos + 1, len);
+                if (second >= len || src.charCodeAt(second) !== CH_LT) {
+                    this.pos++;
+                    wordStart = true;
+                    continue;
+                }
                 // << is a heredoc operator even in case-pattern position — unquoted <<
                 // inside a pattern is a bash syntax error, so no caseDepth gate here
-                if (this.pos + 2 < len && src.charCodeAt(this.pos + 2) === CH_LT) {
-                    this.pos += 3; // <<< herestring
-                }
-                else {
-                    this.pos += 2;
-                    const strip = this.pos < len && src.charCodeAt(this.pos) === CH_DASH;
-                    if (strip)
-                        this.pos++;
+                const op = this.readHereOperator(second);
+                if (op !== "<<<") {
                     this.skipSpacesAndTabs();
                     this.readHereDocDelimiter();
                     // Empty unquoted delimiter means there was no delimiter word (`<< )`)
                     if (this._hereDelim || this._hereQuoted) {
                         (pendingDelims ?? (pendingDelims = [])).push({
                             delimiter: this._hereDelim,
-                            strip,
+                            strip: op === "<<-",
                             quoted: this._hereQuoted,
                         });
                     }
